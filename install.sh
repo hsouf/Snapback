@@ -1,15 +1,15 @@
 #!/bin/bash
-# Install or remove toolchain-guard on a macOS 13+ machine.
+# Install or remove Snapback on a macOS 13+ machine.
 #   sudo ./install.sh              install (keeps an existing rules.json)
 #   sudo ./install.sh --overwrite-rules
 #   sudo ./install.sh --uninstall
 set -euo pipefail
 
-LABEL="com.example.toolchain-guard"
-HOME_DIR="/Library/Application Support/ToolchainGuard"
+LABEL="com.example.snapback"
+HOME_DIR="/Library/Application Support/Snapback"
 PLIST="/Library/LaunchDaemons/$LABEL.plist"
-GUARD="$HOME_DIR/bin/toolchain_guard.py"
-LOG="/var/log/toolchain-guard.jsonl"
+GUARD="$HOME_DIR/bin/snapback.py"
+LOG="/var/log/snapback.jsonl"
 SRC="$(cd "$(dirname "$0")" && pwd)"
 PY=(/usr/bin/python3 -I)
 
@@ -30,7 +30,7 @@ if [[ "${1:-}" == "--uninstall" ]]; then
   launchctl bootout "system/$LABEL" 2>/dev/null || true
   rm -f "$PLIST"
   echo "Stopped and removed the LaunchDaemon."
-  echo "Left in place for review: $HOME_DIR (vault, quarantine) and /var/log/toolchain-guard.*"
+  echo "Left in place for review: $HOME_DIR (vault, quarantine) and /var/log/snapback.*"
   exit 0
 fi
 
@@ -48,7 +48,7 @@ launchctl bootout "system/$LABEL" 2>/dev/null || true
 install -d -o root -g wheel -m 0755 "$HOME_DIR" "$HOME_DIR/bin"
 install -d -o root -g wheel -m 0700 "$HOME_DIR/control" "$HOME_DIR/vault" "$HOME_DIR/quarantine"
 chmod 0700 "$HOME_DIR/control"   # tighten an older install
-install -o root -g wheel -m 0755 "$SRC/toolchain_guard.py" "$GUARD"
+install -o root -g wheel -m 0755 "$SRC/snapback.py" "$GUARD"
 install -o root -g wheel -m 0755 "$SRC/brew-guarded" "$HOME_DIR/bin/brew-guarded"
 if [[ ! -f "$HOME_DIR/rules.json" || "${1:-}" == "--overwrite-rules" ]]; then
   install -o root -g wheel -m 0600 "$SRC/rules.json" "$HOME_DIR/rules.json"
@@ -78,7 +78,7 @@ Installed. Mode is whatever rules.json says (ships as "audit": alert only).
 
 One manual step: eslogger needs Full Disk Access for the process that launches it.
   System Settings > Privacy & Security > Full Disk Access > add the Python
-  binary named in /var/log/toolchain-guard.err if eslogger reports it is not
+  binary named in /var/log/snapback.err if eslogger reports it is not
   permitted, then: sudo launchctl kickstart -k system/$LABEL
   (On a managed fleet, push this as a PPPC profile from your MDM instead.)
 

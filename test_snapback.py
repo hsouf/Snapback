@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tests for toolchain_guard using synthetic eslogger events and real processes.
+"""Tests for snapback using synthetic eslogger events and real processes.
 
 Builds a fake Homebrew prefix under a temp dir, replays the exact sequence from
 the post-mortem, and checks that the script's processes are killed, pyenv is
@@ -24,7 +24,7 @@ import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-import toolchain_guard as tg  # noqa: E402
+import snapback as tg  # noqa: E402
 
 # Real paths, like Endpoint Security reports them (/var -> /private/var on macOS).
 T = os.path.realpath(tempfile.mkdtemp(prefix="tgtest-"))
@@ -435,7 +435,7 @@ check(len(violations("shell-startup-files")) == 1, "the same alert-only event is
 print("\n== 6. tamper attempts against the watcher ==")
 g.handle(ev("signal", {"sig": 9, "target": proc(os.getpid(), 1, "/usr/bin/python3")},
             5555, 1, "/bin/kill"))
-g.handle(exec_ev(5556, 1, "/bin/launchctl", ["launchctl", "bootout", "system/com.example.toolchain-guard"]))
+g.handle(exec_ev(5556, 1, "/bin/launchctl", ["launchctl", "bootout", "system/com.example.snapback"]))
 tam = [r for r in log_records() if r["type"] == "tamper_attempt"]
 check(any("signal 9" in r["detail"] for r in tam), "SIGKILL aimed at the watcher is reported")
 check(any("command aimed" in r["detail"] for r in tam), "launchctl bootout of the watcher is reported")
@@ -444,7 +444,7 @@ check(any("command aimed" in r["detail"] for r in tam), "launchctl bootout of th
 print("\n== 7. CLI ==")
 build_prefix()
 rules = write_rules()
-env_cmd = [sys.executable, os.path.join(HERE, "toolchain_guard.py"), "--rules", rules, "--allow-nonroot"]
+env_cmd = [sys.executable, os.path.join(HERE, "snapback.py"), "--rules", rules, "--allow-nonroot"]
 shutil.rmtree(os.path.join(T, "guard"), ignore_errors=True)
 out = subprocess.run(env_cmd + ["baseline"], capture_output=True, text=True)
 check(out.returncode == 0 and "entries" in out.stdout, "baseline command")
@@ -997,7 +997,7 @@ if ok:
     hdrs, body = got[0]
     hdrs = {k.lower(): v for k, v in hdrs.items()}  # HTTP header names are case-insensitive
     want = "sha256=" + hmac.new(b"s3cret", body, hashlib.sha256).hexdigest()
-    ok = hdrs.get("x-toolchainguard-signature") == want and json.loads(body)["rule"] == "x"
+    ok = hdrs.get("x-snapback-signature") == want and json.loads(body)["rule"] == "x"
 check(ok, "webhook delivered with a valid HMAC signature")
 
 # ---------------------------------------------------------------- 21. shipped config

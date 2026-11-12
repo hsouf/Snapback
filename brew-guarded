@@ -1,5 +1,5 @@
 #!/bin/bash
-# brew wrapper for machines running toolchain-guard.
+# brew wrapper for machines running Snapback.
 #
 # Commands that change the Homebrew prefix run inside a maintenance window, so
 # the watcher accepts brew's own changes and re-baselines when brew finishes.
@@ -10,11 +10,11 @@
 # run brew at the same time, and the window closes the moment this script exits,
 # even if the terminal is closed mid-upgrade.
 #
-# Use it with:  alias brew='/Library/Application\ Support/ToolchainGuard/bin/brew-guarded'
+# Use it with:  alias brew='/Library/Application\ Support/Snapback/bin/brew-guarded'
 # If you also use a dedicated "brew" account (layer 2), set BREW to:
 #   BREW=(sudo -Hu brew /opt/homebrew/bin/brew)
 set -u
-GUARD=(/usr/bin/python3 -I "/Library/Application Support/ToolchainGuard/bin/toolchain_guard.py")
+GUARD=(/usr/bin/python3 -I "/Library/Application Support/Snapback/bin/snapback.py")
 BREW=(/opt/homebrew/bin/brew)
 WINDOW_MINUTES=60
 

@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>com.example.toolchain-guard</string>
+    <string>com.example.snapback</string>
 
     <!-- Apple's Python (Command Line Tools), isolated mode: ignores PYTHON* env
          vars and user site-packages. Never a Python from /opt/homebrew. -->
@@ -11,7 +11,7 @@
     <array>
         <string>/usr/bin/python3</string>
         <string>-I</string>
-        <string>/Library/Application Support/ToolchainGuard/bin/toolchain_guard.py</string>
+        <string>/Library/Application Support/Snapback/bin/snapback.py</string>
         <string>run</string>
     </array>
 
@@ -41,8 +41,8 @@
     </dict>
 
     <key>StandardErrorPath</key>
-    <string>/var/log/toolchain-guard.err</string>
+    <string>/var/log/snapback.err</string>
     <key>StandardOutPath</key>
-    <string>/var/log/toolchain-guard.err</string>
+    <string>/var/log/snapback.err</string>
 </dict>
 </plist>

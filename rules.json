@@ -1,8 +1,8 @@
 {
   "settings": {
     "mode": "audit",
-    "label": "com.example.toolchain-guard",
-    "log_file": "/var/log/toolchain-guard.jsonl",
+    "label": "com.example.snapback",
+    "log_file": "/var/log/snapback.jsonl",
     "webhook_url": "",
     "webhook_secret": "",
     "scan_interval_seconds": 120,
@@ -191,9 +191,9 @@
       "description": "The watcher's own code, rules and LaunchDaemon",
       "severity": "critical",
       "paths": [
-        "/Library/Application Support/ToolchainGuard/bin",
-        "/Library/Application Support/ToolchainGuard/rules.json",
-        "/Library/LaunchDaemons/com.example.toolchain-guard.plist"
+        "/Library/Application Support/Snapback/bin",
+        "/Library/Application Support/Snapback/rules.json",
+        "/Library/LaunchDaemons/com.example.snapback.plist"
       ],
       "actions": ["alert", "snapshot"]
     },

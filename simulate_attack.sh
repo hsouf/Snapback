@@ -1,6 +1,6 @@
 #!/bin/bash
 # Reproduces the post-mortem's file operations against pyenv, with a harmless
-# payload (a comment line), so you can confirm toolchain-guard stops it.
+# payload (a comment line), so you can confirm Snapback stops it.
 # Run as your normal user, NOT with sudo, on a test machine.
 #
 #   ./simulate_attack.sh           run the attack (expect it to die with "Killed: 9")
@@ -8,8 +8,8 @@
 #   ./simulate_attack.sh --restore put the backup back if the watcher did not
 set -u
 LINK=/opt/homebrew/bin/pyenv
-BACKUP=/tmp/toolchain-guard-sim.backup
-MARK="toolchain-guard simulation (harmless)"
+BACKUP=/tmp/snapback-sim.backup
+MARK="Snapback simulation (harmless)"
 
 realpath_py() { /usr/bin/python3 -I -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$1"; }
 TARGET="$(realpath_py /opt/homebrew/opt/pyenv/libexec/pyenv)"
@@ -27,7 +27,7 @@ case "${1:-}" in
     fi
     [[ -f "$BACKUP" ]] && cmp -s "$BACKUP" "$TARGET" && echo "PASS: pyenv matches the pre-attack copy"
     echo "symlink: $LINK -> $(readlink "$LINK")"
-    echo "Alerts: sudo tail -n 5 /var/log/toolchain-guard.jsonl"
+    echo "Alerts: sudo tail -n 5 /var/log/snapback.jsonl"
     exit 0 ;;
   --restore)
     cp "$BACKUP" "$TARGET" && echo "restored $TARGET from $BACKUP"

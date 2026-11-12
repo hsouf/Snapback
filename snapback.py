@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""toolchain-guard: a root watcher for macOS that detects, stops and undoes what an
+"""Snapback: a root watcher for macOS that detects, stops and undoes what an
 attacker running as the developer does to a dev machine: tampering with toolchains
 (Homebrew, pyenv, PATH), persistence (launch agents, login items, shell and AI-tool
 startup files), credential theft, and well-known attack commands.
@@ -58,7 +58,7 @@ try:
 except ImportError:  # pragma: no cover
     syslog = None
 
-HOME_DIR = "/Library/Application Support/ToolchainGuard"
+HOME_DIR = "/Library/Application Support/Snapback"
 DEFAULT_RULES = os.path.join(HOME_DIR, "rules.json")
 DATA_VOLUME = "/System/Volumes/Data"
 
@@ -584,8 +584,8 @@ class Config:
         self.quarantine_dir = os.path.join(self.home, "quarantine")
         self.control_dir = os.path.join(self.home, "control")
         self.mode = s.get("mode", "enforce")  # "enforce" or "audit"
-        self.label = s.get("label", "com.example.toolchain-guard")
-        self.log_file = s.get("log_file", "/var/log/toolchain-guard.jsonl")
+        self.label = s.get("label", "com.example.snapback")
+        self.log_file = s.get("log_file", "/var/log/snapback.jsonl")
         self.webhook_url = s.get("webhook_url") or None
         self.webhook_secret = s.get("webhook_secret") or None
         self.scan_interval = float(s.get("scan_interval_seconds", 120))
@@ -879,7 +879,7 @@ class Alerter:
         self._worker = None
         self.use_syslog = bool(syslog) and cfg.syslog
         if self.use_syslog:
-            syslog.openlog("toolchain-guard", syslog.LOG_PID, syslog.LOG_AUTH)
+            syslog.openlog("snapback", syslog.LOG_PID, syslog.LOG_AUTH)
 
     def emit(self, record, remote=True):
         record = dict(record)
@@ -892,7 +892,7 @@ class Alerter:
                 with os.fdopen(fd, "a") as f:
                     f.write(line + "\n")
             except OSError as e:
-                sys.stderr.write(f"toolchain-guard: cannot write log: {e}\n{line}\n")
+                sys.stderr.write(f"snapback: cannot write log: {e}\n{line}\n")
         if not remote:
             return
         if self.use_syslog and record.get("type") != "heartbeat":
@@ -928,10 +928,10 @@ class Alerter:
 
     def _post(self, line):
         body = line.encode()
-        headers = {"Content-Type": "application/json", "X-ToolchainGuard-Host": self.host}
+        headers = {"Content-Type": "application/json", "X-Snapback-Host": self.host}
         if self.cfg.webhook_secret:
             mac = hmac.new(self.cfg.webhook_secret.encode(), body, hashlib.sha256).hexdigest()
-            headers["X-ToolchainGuard-Signature"] = "sha256=" + mac
+            headers["X-Snapback-Signature"] = "sha256=" + mac
         try:
             req = urllib.request.Request(self.cfg.webhook_url, data=body, headers=headers)
             urllib.request.urlopen(req, timeout=5).close()
@@ -2044,7 +2044,7 @@ class Guard:
         if tool not in ("launchctl", "kill", "pkill", "killall") or not args:
             return
         cmd = " ".join(args)
-        targets_us = (self.cfg.label in cmd or "toolchain_guard" in cmd or "eslogger" in cmd
+        targets_us = (self.cfg.label in cmd or "snapback" in cmd.lower() or "eslogger" in cmd
                       or any(str(p) in args for p in self.self_pids))
         if targets_us:
             self.alerter.emit({"type": "tamper_attempt", "severity": "high",
@@ -2177,7 +2177,7 @@ class Guard:
         self.running = False
         rec = {"type": "stopped", "signal": signum, "authorized": authorized}
         if not authorized:
-            rec.update(severity="high", detail="stop signal without `toolchain_guard.py stop`: "
+            rec.update(severity="high", detail="stop signal without `snapback.py stop`: "
                                                "a system shutdown, or someone stopping the watcher")
         self.alerter.emit(rec)
         self.alerter.flush(5)
@@ -2316,7 +2316,7 @@ def proc_uid(pid):
 
 
 def main(argv=None):
-    ap = argparse.ArgumentParser(prog="toolchain_guard",
+    ap = argparse.ArgumentParser(prog="snapback",
                                  description="Detect, stop and undo tampering on a developer machine.")
     ap.add_argument("--rules", default=DEFAULT_RULES, help="path to rules.json")
     ap.add_argument("--allow-nonroot", action="store_true", help=argparse.SUPPRESS)
@@ -2340,7 +2340,7 @@ def main(argv=None):
     args = ap.parse_args(argv)
 
     if os.geteuid() != 0 and not args.allow_nonroot:
-        sys.exit("toolchain_guard: must run as root (use sudo)")
+        sys.exit("snapback: must run as root (use sudo)")
     cfg = Config(args.rules)
     alerter = Alerter(cfg)
     by = os.environ.get("SUDO_USER")
