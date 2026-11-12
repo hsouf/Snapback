@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.example.toolchain-guard</string>
+
+    <!-- Apple's Python (Command Line Tools), isolated mode: ignores PYTHON* env
+         vars and user site-packages. Never a Python from /opt/homebrew. -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/bin/python3</string>
+        <string>-I</string>
+        <string>/Library/Application Support/ToolchainGuard/bin/toolchain_guard.py</string>
+        <string>run</string>
+    </array>
+
+    <!-- Runs as root, so the developer's account (and malware running as it)
+         gets "Operation not permitted" when trying to kill it. -->
+    <key>UserName</key>
+    <string>root</string>
+
+    <!-- Start at boot and restart whenever it exits, for any reason. -->
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>ThrottleInterval</key>
+    <integer>5</integer>
+
+    <!-- Not throttled like a background job: reaction time is the whole point. -->
+    <key>ProcessType</key>
+    <string>Interactive</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <key>PYTHONUNBUFFERED</key>
+        <string>1</string>
+    </dict>
+
+    <key>StandardErrorPath</key>
+    <string>/var/log/toolchain-guard.err</string>
+    <key>StandardOutPath</key>
+    <string>/var/log/toolchain-guard.err</string>
+</dict>
+</plist>

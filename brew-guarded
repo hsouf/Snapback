@@ -1,0 +1,34 @@
+#!/bin/bash
+# brew wrapper for machines running toolchain-guard.
+#
+# Commands that change the Homebrew prefix run inside a maintenance window, so
+# the watcher accepts brew's own changes and re-baselines when brew finishes.
+# Opening a window needs sudo, so a background script can't open one quietly.
+#
+# The window is bound to this script's process ($$): only brew started from here
+# (and its children) is allowed to write, not other processes that happen to
+# run brew at the same time, and the window closes the moment this script exits,
+# even if the terminal is closed mid-upgrade.
+#
+# Use it with:  alias brew='/Library/Application\ Support/ToolchainGuard/bin/brew-guarded'
+# If you also use a dedicated "brew" account (layer 2), set BREW to:
+#   BREW=(sudo -Hu brew /opt/homebrew/bin/brew)
+set -u
+GUARD=(/usr/bin/python3 -I "/Library/Application Support/ToolchainGuard/bin/toolchain_guard.py")
+BREW=(/opt/homebrew/bin/brew)
+WINDOW_MINUTES=60
+
+case "${1:-}" in
+  install|reinstall|upgrade|uninstall|remove|rm|update|tap|untap|link|unlink|\
+  cleanup|autoremove|postinstall|bundle|migrate|pin|unpin|services)
+    sudo "${GUARD[@]}" window open "$WINDOW_MINUTES" --pid $$ >/dev/null || exit 1
+    "${BREW[@]}" "$@"   # not exec: this shell must stay alive as the window's owner
+    rc=$?
+    # Best effort; the watcher closes the window anyway when this shell exits.
+    sudo -n "${GUARD[@]}" window close >/dev/null 2>&1
+    exit "$rc"
+    ;;
+  *)
+    exec "${BREW[@]}" "$@"
+    ;;
+esac

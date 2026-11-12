@@ -1,0 +1,415 @@
+{
+  "settings": {
+    "mode": "audit",
+    "label": "com.example.toolchain-guard",
+    "log_file": "/var/log/toolchain-guard.jsonl",
+    "webhook_url": "",
+    "webhook_secret": "",
+    "scan_interval_seconds": 120,
+    "deep_scan_every": 10,
+    "heartbeat_seconds": 60,
+    "rebaseline_settle_seconds": 5,
+    "vault_max_file_bytes": 5242880,
+    "window_close_rebaseline": "touched",
+    "stream_stall_seconds": 60,
+    "kill_remote_sessions": true,
+    "alert_dedupe_seconds": 30
+  },
+  "rules": [
+    {
+      "id": "homebrew-toolchain",
+      "description": "Homebrew kegs, brew itself, its Ruby gems, global npm and Python packages, trust stores, and the PATH symlinks and shell completions that point into them",
+      "severity": "critical",
+      "paths": [
+        "/opt/homebrew/Cellar",
+        "/opt/homebrew/bin",
+        "/opt/homebrew/sbin",
+        "/opt/homebrew/opt",
+        "/opt/homebrew/lib",
+        "/opt/homebrew/Library",
+        "/opt/homebrew/share/zsh",
+        "/opt/homebrew/etc/profile.d",
+        "/opt/homebrew/etc/bash_completion.d",
+        "/opt/homebrew/etc/pyenv.d",
+        "/opt/homebrew/etc/gitconfig",
+        "/opt/homebrew/etc/openssl@3",
+        "/opt/homebrew/etc/ca-certificates"
+      ],
+      "exclude": ["*/__pycache__*"],
+      "allow": {
+        "users": ["brew"],
+        "ancestor_paths": ["/opt/homebrew/bin/brew", "/opt/homebrew/Library/Homebrew/"],
+        "only_during_window": true
+      },
+      "actions": ["kill", "revert", "alert"],
+      "kill_scope": "script"
+    },
+    {
+      "id": "homebrew-bytecode",
+      "description": "Python bytecode caches under Homebrew (a crafted .pyc runs in place of its source); alert only because Python also writes these lazily",
+      "severity": "medium",
+      "paths": ["/opt/homebrew/Cellar", "/opt/homebrew/lib"],
+      "include": ["*/__pycache__/*.pyc"],
+      "events": ["create", "rename", "link", "close", "clone", "copyfile"],
+      "allow": {
+        "ancestor_paths": ["/opt/homebrew/bin/brew", "/opt/homebrew/Library/Homebrew/"],
+        "only_during_window": true
+      },
+      "actions": ["alert"]
+    },
+    {
+      "id": "pyenv",
+      "description": "pyenv shims, hooks and plugins, which run on every python/pip call",
+      "severity": "critical",
+      "paths": ["~/.pyenv/shims", "~/.pyenv/bin", "~/.pyenv/libexec", "~/.pyenv/plugins", "~/.pyenv/pyenv.d"],
+      "allow": {
+        "ancestor_regex": [
+          "/Cellar/pyenv/[^/]+/libexec/pyenv",
+          "/\\.pyenv/(libexec|plugins/[^/]+/bin)/pyenv"
+        ]
+      },
+      "actions": ["kill", "revert", "alert"],
+      "kill_scope": "script"
+    },
+    {
+      "id": "python-startup-hooks",
+      "description": ".pth files and sitecustomize/usercustomize modules, which run code every time Python starts",
+      "severity": "medium",
+      "paths": ["/opt/homebrew/lib", "~/Library/Python", "~/.pyenv/versions", "/Library/Frameworks/Python.framework"],
+      "include": ["*/site-packages/*.pth", "*/sitecustomize.py", "*/usercustomize.py"],
+      "allow": {
+        "ancestor_paths": ["/opt/homebrew/bin/brew", "/opt/homebrew/Library/Homebrew/"],
+        "only_during_window": true
+      },
+      "actions": ["alert", "snapshot"]
+    },
+    {
+      "id": "replace-executable-on-path",
+      "description": "A file renamed over an existing file in a user PATH directory (the pyenv_ -> pyenv pattern)",
+      "severity": "high",
+      "paths": ["~/.local/bin", "~/bin", "~/.cargo/bin", "~/go/bin", "~/.npm-global/bin", "/usr/local/bin"],
+      "events": ["rename"],
+      "rename_over_existing_only": true,
+      "actions": ["alert", "snapshot"]
+    },
+    {
+      "id": "shell-startup-files",
+      "description": "Files every new shell sources",
+      "severity": "medium",
+      "paths": [
+        "~/.zshrc", "~/.zprofile", "~/.zshenv", "~/.zlogin", "~/.zlogout",
+        "~/.bashrc", "~/.bash_profile", "~/.bash_login", "~/.profile", "~/.config/fish",
+        "~/.oh-my-zsh/custom", "~/.zsh",
+        "/private/etc/zshrc", "/private/etc/zprofile", "/private/etc/zshenv", "/private/etc/bashrc",
+        "/private/etc/profile", "/private/etc/paths", "/private/etc/paths.d"
+      ],
+      "actions": ["alert", "snapshot"]
+    },
+    {
+      "id": "developer-tool-hooks",
+      "description": "Config that makes git, ssh, package managers, editors and AI coding tools run commands (hooks, ProxyCommand, MCP servers, extensions)",
+      "severity": "high",
+      "paths": [
+        "~/.gitconfig", "~/.config/git",
+        "~/.ssh/config", "~/.ssh/rc", "~/.ssh/environment", "~/.ssh/authorized_keys", "~/.ssh/authorized_keys2",
+        "~/.npmrc", "~/.yarnrc", "~/.yarnrc.yml", "~/.config/pip", "~/.pip", "~/.pydistutils.cfg", "~/.condarc",
+        "~/.claude/settings.json", "~/.claude/hooks",
+        "~/.cursor/mcp.json", "~/.codeium/windsurf/mcp_config.json",
+        "~/Library/Application Support/Claude/claude_desktop_config.json",
+        "~/.vscode/extensions", "~/.cursor/extensions"
+      ],
+      "exclude": ["*/extensions/.obsolete", "*/extensions/extensions.json", "*/.vscode/extensions/.*"],
+      "allow": {
+        "signing_ids": ["UBF8T346G9:com.microsoft.VSCode*"],
+        "helpers": false
+      },
+      "actions": ["alert", "snapshot"]
+    },
+    {
+      "id": "launch-persistence",
+      "description": "New or changed launch agents and daemons",
+      "severity": "high",
+      "paths": ["~/Library/LaunchAgents", "/Library/LaunchAgents", "/Library/LaunchDaemons"],
+      "events": ["create", "rename", "link", "close", "copyfile"],
+      "actions": ["alert", "snapshot"]
+    },
+    {
+      "id": "system-auth-and-persistence",
+      "description": "sudo, PAM, sshd and hosts configuration, cron tables, periodic scripts and authorization plugins (changing these needs root)",
+      "severity": "high",
+      "paths": [
+        "/private/etc/sudoers", "/private/etc/sudoers.d", "/private/etc/pam.d", "/private/etc/ssh",
+        "/private/etc/hosts", "/private/etc/periodic", "/private/var/at/tabs",
+        "/Library/Security/SecurityAgentPlugins"
+      ],
+      "actions": ["alert", "snapshot"]
+    },
+    {
+      "id": "credential-access",
+      "description": "A process outside the allow list read a credential store: SSH keys, cloud and registry tokens, keychains, browser cookies and saved passwords, wallets",
+      "severity": "high",
+      "access": "read",
+      "paths": [
+        "~/.ssh", "~/.aws", "~/.config/gcloud", "~/.azure", "~/.kube", "~/.docker/config.json",
+        "~/.npmrc", "~/.pypirc", "~/.netrc", "~/.git-credentials", "~/.config/gh/hosts.yml", "~/.gnupg",
+        "~/.config/solana", "~/.ethereum/keystore", "~/.foundry/keystores",
+        "~/Library/Keychains",
+        "~/Library/Application Support/Google/Chrome",
+        "~/Library/Application Support/BraveSoftware/Brave-Browser",
+        "~/Library/Application Support/Microsoft Edge",
+        "~/Library/Application Support/Arc/User Data",
+        "~/Library/Application Support/Firefox/Profiles"
+      ],
+      "include": [
+        "*/.ssh/id_*", "*/.ssh/*.pem", "*/.aws/credentials", "*/.aws/sso/cache/*", "*/.aws/cli/cache/*",
+        "*/.config/gcloud/*credentials*", "*/.config/gcloud/access_tokens.db", "*/.azure/*token*",
+        "*/.kube/config", "*/.docker/config.json", "*/.npmrc", "*/.pypirc", "*/.netrc", "*/.git-credentials",
+        "*/.config/gh/hosts.yml", "*/.gnupg/private-keys-v1.d/*", "*/.config/solana/*.json",
+        "*/.ethereum/keystore/*", "*/.foundry/keystores/*", "*/Library/Keychains/*.keychain-db",
+        "*/Cookies", "*/Login Data", "*/Web Data", "*/Local Extension Settings/*",
+        "*/cookies.sqlite", "*/logins.json", "*/key4.db"
+      ],
+      "exclude": ["*.pub"],
+      "allow": {
+        "platform_binaries": "non_tools",
+        "protected_images": true,
+        "signing_ids": [
+          "EQHXZ8M8AV:com.google.Chrome*",
+          "KL8N8XSYF4:com.brave.Browser*",
+          "UBF8T346G9:com.microsoft.edgemac*",
+          "43AQ936H96:org.mozilla.*",
+          "S6N382Y83G:company.thebrowser.*",
+          "9BNSXJN65R:*",
+          "59GAB85EFG:com.apple.git*"
+        ],
+        "helpers": false
+      },
+      "actions": ["alert"]
+    },
+    {
+      "id": "guard-self-protection",
+      "description": "The watcher's own code, rules and LaunchDaemon",
+      "severity": "critical",
+      "paths": [
+        "/Library/Application Support/ToolchainGuard/bin",
+        "/Library/Application Support/ToolchainGuard/rules.json",
+        "/Library/LaunchDaemons/com.example.toolchain-guard.plist"
+      ],
+      "actions": ["alert", "snapshot"]
+    },
+
+    {
+      "id": "reverse-shell",
+      "type": "exec",
+      "description": "A command that wires a shell to a network socket",
+      "severity": "critical",
+      "match": {
+        "args": "(-i\\s*[<>]?&\\s*/dev/(tcp|udp)/)|(>&\\s*/dev/(tcp|udp)/\\S+\\s+0>&1)|(\\d+<>\\s*/dev/(tcp|udp)/)|(\\b(nc|ncat|netcat)\\b.*\\s-[a-zA-Z]*[ec]\\s+\\S*/(ba|z|k|da)?sh\\b)|(\\bsocat\\b.*\\b(exec|system):.*\\b(sh|bash|zsh|pty)\\b)|(pty\\.spawn\\()|(socket\\.socket\\(.*\\.connect\\(.*(dup2|subprocess|os\\.system|pty))|(\\bmkfifo\\b.*\\|\\s*(nc|ncat|netcat|openssl)\\b)|(TCPSocket\\.(new|open)\\(.*(exec|spawn|popen|system))|(fsockopen\\(.*(exec|system|passthru|shell_exec|proc_open))|(IO::Socket::INET.*\\bexec\\b)"
+      },
+      "actions": ["kill", "alert"],
+      "kill_scope": "script"
+    },
+    {
+      "id": "password-phishing-dialog",
+      "type": "exec",
+      "description": "osascript showing a dialog with a hidden answer field: how macOS stealers phish the login password",
+      "severity": "critical",
+      "match": {"executable": "/osascript$", "args": "(?i)display\\s+dialog.*hidden\\s+answer"},
+      "actions": ["kill", "alert"],
+      "kill_scope": "script"
+    },
+    {
+      "id": "password-verification",
+      "type": "exec",
+      "description": "A password checked from the command line (stealers verify a phished password this way)",
+      "severity": "critical",
+      "match": {"args": "(\\bdscl\\b.*\\s-authonly\\b)|(\\bsecurity\\s+unlock-keychain\\b.*\\s-p\\s)"},
+      "actions": ["kill", "alert"],
+      "kill_scope": "script"
+    },
+    {
+      "id": "keychain-dump",
+      "type": "exec",
+      "description": "security(1) dumping or printing keychain secrets",
+      "severity": "high",
+      "match": {
+        "executable": "/usr/bin/security$",
+        "args": "\\b(dump-keychain|set-key-partition-list|export)\\b|\\bfind-(generic|internet)-password\\b.*\\s-[a-zA-Z]*[wg]\\b"
+      },
+      "actions": ["alert"]
+    },
+    {
+      "id": "browser-data-access",
+      "type": "exec",
+      "description": "A command that names browser cookie, password or wallet-extension stores",
+      "severity": "high",
+      "match": {"args": "(?i)(/Cookies\\b|Login Data|Web Data|cookies\\.sqlite|logins\\.json|key4\\.db|Local Extension Settings|login\\.keychain)"},
+      "actions": ["alert"]
+    },
+    {
+      "id": "sensitive-archive-or-upload",
+      "type": "exec",
+      "description": "Archiving, copying or uploading credential directories",
+      "severity": "high",
+      "match": {"args": "\\b(zip|ditto|tar|rsync|scp|curl|cp)\\b.*(/\\.ssh\\b|/Keychains\\b|/\\.aws\\b|/\\.config/gcloud\\b|/\\.kube\\b|/\\.gnupg\\b|/\\.config/solana\\b|/\\.ethereum\\b)"},
+      "exclude_match": {"args": "\\.pub\\b"},
+      "actions": ["alert"]
+    },
+    {
+      "id": "security-controls-disabled",
+      "type": "exec",
+      "description": "Gatekeeper, SIP, TCC, XProtect or quarantine protections turned off",
+      "severity": "high",
+      "match": {"args": "\\bspctl\\s+--(master-disable|global-disable|disable)\\b|\\bcsrutil\\s+disable\\b|\\btccutil\\s+reset\\b|\\bdefaults\\s+write\\b.*\\bLSQuarantine\\b|\\bsystemextensionsctl\\s+uninstall\\b|\\blaunchctl\\s+(unload|bootout|disable|remove)\\b.*(XProtect|MRT|endpointsecurity)"},
+      "actions": ["alert"]
+    },
+    {
+      "id": "quarantine-attribute-removed",
+      "type": "exec",
+      "description": "The quarantine attribute stripped from downloaded files, which skips Gatekeeper",
+      "severity": "medium",
+      "match": {"executable": "/usr/bin/xattr$", "args": "\\s-[a-zA-Z]*d[a-zA-Z]*\\s+com\\.apple\\.quarantine\\b|\\s-[a-zA-Z]*c[a-zA-Z]*(\\s|$)"},
+      "actions": ["alert"]
+    },
+    {
+      "id": "persistence-commands",
+      "type": "exec",
+      "description": "Loading launch jobs, editing crontabs, login hooks or login items",
+      "severity": "high",
+      "match": {"args": "\\blaunchctl\\s+(load|bootstrap|submit)\\b|\\bcrontab\\b(?!\\s+-l\\b)|\\bdefaults\\s+write\\s+\\S*loginwindow\\s+(LoginHook|LogoutHook)\\b|(?i:make\\s+(new\\s+)?login\\s+item)"},
+      "allow": {"ancestor_paths": ["/opt/homebrew/Library/Homebrew/"]},
+      "actions": ["alert"]
+    },
+    {
+      "id": "account-manipulation",
+      "type": "exec",
+      "description": "Creating users, changing passwords or adding someone to a group from the command line",
+      "severity": "high",
+      "match": {"args": "\\bdscl\\s+\\S+\\s+-(create|append|merge|passwd|change)\\b|\\bdseditgroup\\b.*\\s-a\\b|\\bsysadminctl\\b.*-(addUser|resetPasswordFor|secureTokenOn)\\b|\\bpwpolicy\\b.*-(disableuser|enableuser|setpolicy)\\b"},
+      "actions": ["alert"]
+    },
+    {
+      "id": "remote-access-enabled",
+      "type": "exec",
+      "description": "SSH, screen sharing or remote management switched on",
+      "severity": "high",
+      "match": {"args": "\\bsystemsetup\\s+-setremotelogin\\s+on\\b|\\blaunchctl\\s+(load|enable|bootstrap)\\b.*\\b(ssh|screensharing)\\b|\\bkickstart\\b.*\\s-activate\\b"},
+      "actions": ["alert"]
+    },
+    {
+      "id": "traffic-interception",
+      "type": "exec",
+      "description": "A trusted root certificate, proxy or DNS server added (traffic interception)",
+      "severity": "high",
+      "match": {"args": "\\bsecurity\\s+add-trusted-cert\\b|\\bnetworksetup\\s+-set(web|secureweb|socksfirewall|ftp)proxy\\b|\\bnetworksetup\\s+-setautoproxyurl\\b|\\bnetworksetup\\s+-setdnsservers\\b"},
+      "actions": ["alert"]
+    },
+    {
+      "id": "sudo-password-from-stdin",
+      "type": "exec",
+      "description": "sudo reading the password from stdin (a script holding the user's password)",
+      "severity": "medium",
+      "match": {"args": "\\bsudo\\s+(\\S+\\s+)*(-[a-zA-Z]*S\\b|--stdin\\b)"},
+      "actions": ["alert"]
+    },
+    {
+      "id": "download-and-execute",
+      "type": "exec",
+      "description": "Code piped from the network or from base64 straight into an interpreter",
+      "severity": "medium",
+      "match": {"args": "\\b(curl|wget)\\b[^|]*\\|\\s*(sudo\\s+)?((ba|z|da|k)?sh|python[0-9.]*|perl|ruby|node|osascript)\\b|\\bbase64\\s+(-d|--decode|-D)\\b[^|]*\\|\\s*((ba|z)?sh|python[0-9.]*|osascript)\\b"},
+      "actions": ["alert"]
+    },
+    {
+      "id": "silent-screen-capture",
+      "type": "exec",
+      "description": "Screenshots taken without the shutter sound",
+      "severity": "medium",
+      "match": {"executable": "/screencapture$", "args": "\\s-[a-zA-Z]*x"},
+      "actions": ["alert"]
+    },
+    {
+      "id": "library-injection-env",
+      "type": "exec",
+      "description": "A program started with DYLD_INSERT_LIBRARIES (code injection)",
+      "severity": "high",
+      "match": {"args": "\\bDYLD_INSERT_LIBRARIES="},
+      "actions": ["alert"]
+    },
+
+    {
+      "id": "remote-login",
+      "type": "event",
+      "description": "Someone logged in over SSH or connected to screen sharing",
+      "severity": "high",
+      "events": ["openssh_login", "screensharing_attach"],
+      "actions": ["alert"]
+    },
+    {
+      "id": "account-changes",
+      "type": "event",
+      "description": "A user or group was created, changed or given a new password",
+      "severity": "high",
+      "events": ["od_create_user", "od_create_group", "od_group_add", "od_group_set", "od_modify_password",
+                 "od_enable_user", "od_attribute_value_add", "od_attribute_set"],
+      "actions": ["alert"]
+    },
+    {
+      "id": "tcc-permission-change",
+      "type": "event",
+      "description": "A privacy permission (Full Disk Access, Accessibility, Screen Recording...) was granted or changed",
+      "severity": "high",
+      "events": ["tcc_modify"],
+      "actions": ["alert"]
+    },
+    {
+      "id": "background-item-added",
+      "type": "event",
+      "description": "A login item, launch agent or launch daemon was registered with the system",
+      "severity": "high",
+      "events": ["btm_launch_item_add"],
+      "actions": ["alert"]
+    },
+    {
+      "id": "profile-installed",
+      "type": "event",
+      "description": "A configuration profile was installed",
+      "severity": "high",
+      "events": ["profile_add"],
+      "actions": ["alert"]
+    },
+    {
+      "id": "xprotect-detection",
+      "type": "event",
+      "description": "XProtect detected malware",
+      "severity": "critical",
+      "events": ["xp_malware_detected"],
+      "actions": ["alert"]
+    },
+    {
+      "id": "gatekeeper-override",
+      "type": "event",
+      "description": "Gatekeeper was overridden to open a blocked app",
+      "severity": "medium",
+      "events": ["gatekeeper_user_override"],
+      "actions": ["alert"]
+    },
+    {
+      "id": "sudo-failure",
+      "type": "event",
+      "description": "A failed sudo attempt",
+      "severity": "medium",
+      "events": ["sudo"],
+      "match": {"success": "^false$"},
+      "actions": ["alert"]
+    },
+    {
+      "id": "process-injection",
+      "type": "event",
+      "description": "A thread was created inside another process",
+      "severity": "critical",
+      "events": ["remote_thread_create"],
+      "actions": ["alert"]
+    }
+  ]
+}

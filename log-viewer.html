@@ -1,0 +1,1346 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>toolchain-guard Log</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<style>
+/* Layout: one column. Status bar, totals, alerts as cards with a severity edge, then the edit history as a rail. */
+:root {
+  --bg: #f4f6f8;
+  --surface: #ffffff;
+  --ink: #15191e;
+  --muted: #5a6470;
+  --line: #dbe0e6;
+  --accent: #1f5fbf;
+  --accent-soft: #e6eefb;
+  --critical: #b8312a;
+  --critical-soft: #fbe9e7;
+  --high: #b45f06;
+  --high-soft: #fcefdf;
+  --medium: #8a6d00;
+  --medium-soft: #f8f1d6;
+  --ok: #2e7a4d;
+  --ok-soft: #e3f3e9;
+  --code-bg: #eef1f4;
+  --font-ui: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+  --radius: 8px;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #101317; --surface: #171b20; --ink: #e5e8ec; --muted: #97a1ad; --line: #2a3038;
+    --accent: #7ea6f2; --accent-soft: #1b2a42;
+    --critical: #f2736a; --critical-soft: #3a1d1b; --high: #f0a453; --high-soft: #3a2a17;
+    --medium: #dcc25e; --medium-soft: #34301a; --ok: #66c48d; --ok-soft: #173023;
+    --code-bg: #1f242b; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #101317; --surface: #171b20; --ink: #e5e8ec; --muted: #97a1ad; --line: #2a3038;
+  --accent: #7ea6f2; --accent-soft: #1b2a42;
+  --critical: #f2736a; --critical-soft: #3a1d1b; --high: #f0a453; --high-soft: #3a2a17;
+  --medium: #dcc25e; --medium-soft: #34301a; --ok: #66c48d; --ok-soft: #173023;
+  --code-bg: #1f242b; color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--bg); color: var(--ink);
+  font: 14px/1.5 var(--font-ui);
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 20px 48px;
+}
+.wrap { max-width: 1040px; margin: 0 auto; display: grid; gap: 22px; }
+code, .mono { font-family: var(--font-mono); font-size: 12.5px; }
+.path { font-family: var(--font-mono); font-size: 12.5px; overflow-wrap: anywhere; }
+button, input { font: inherit; color: inherit; }
+button:focus-visible, input:focus-visible, summary:focus-visible, label:focus-within {
+  outline: 2px solid var(--accent); outline-offset: 2px;
+}
+h1, h2, h3 { margin: 0; text-wrap: balance; }
+
+/* top bar */
+.top { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px 20px; }
+.brand { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.brand h1 { font: 650 19px/1.2 var(--font-mono); letter-spacing: -0.01em; }
+.brand span { color: var(--muted); }
+.status { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.chip {
+  display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 999px;
+  border: 1px solid var(--line); background: var(--surface); font-size: 12.5px; white-space: nowrap;
+}
+.chip b { font-weight: 600; }
+.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); flex: none; }
+.dot.ok { background: var(--ok); }
+.dot.bad { background: var(--critical); }
+.mode { font: 600 11px/1 var(--font-mono); letter-spacing: 0.08em; text-transform: uppercase; padding: 5px 9px; }
+.mode.enforce { color: var(--ok); background: var(--ok-soft); border-color: transparent; }
+.mode.audit { color: var(--high); background: var(--high-soft); border-color: transparent; }
+
+/* source banner */
+.source {
+  display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center; justify-content: space-between;
+  border: 1px dashed var(--line); border-radius: var(--radius); padding: 12px 14px; background: var(--surface);
+}
+.source.drag { border-color: var(--accent); background: var(--accent-soft); }
+.source p { margin: 0; min-width: 0; flex: 1 1 360px; }
+.source .hint { color: var(--muted); font-size: 13px; margin-top: 4px; }
+.source .err { color: var(--critical); font-size: 13px; margin-top: 4px; }
+.btns { display: flex; gap: 8px; flex-wrap: wrap; }
+.btn {
+  border: 1px solid var(--line); background: var(--surface); border-radius: 6px; padding: 6px 12px;
+  cursor: pointer; font-size: 13px; font-weight: 500;
+}
+.btn:hover { border-color: var(--accent); }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--surface); }
+.btn.small { padding: 2px 8px; font-size: 12px; }
+.inline-code {
+  font-family: var(--font-mono); font-size: 12px; background: var(--code-bg);
+  padding: 1px 5px; border-radius: 4px; overflow-wrap: anywhere;
+}
+
+/* totals */
+.totals { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
+.total { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 12px 14px; }
+.total .n { font: 600 24px/1.1 var(--font-ui); font-variant-numeric: tabular-nums; }
+.total .l { color: var(--muted); font-size: 12.5px; margin-top: 4px; }
+.total.alarm .n { color: var(--critical); }
+
+/* section heads + filters */
+.sec-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; }
+.sec-head h2 { font-size: 16px; font-weight: 650; }
+.sec-head .sub { color: var(--muted); font-size: 13px; }
+.filters { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; background: var(--surface); }
+.seg button { border: 0; background: none; padding: 5px 10px; cursor: pointer; font-size: 12.5px; color: var(--muted); }
+.seg button + button { border-left: 1px solid var(--line); }
+.seg button[aria-pressed="true"] { background: var(--accent-soft); color: var(--ink); font-weight: 600; }
+.search {
+  border: 1px solid var(--line); background: var(--surface); border-radius: 6px; padding: 5px 10px;
+  width: 260px; max-width: 100%; font-size: 13px;
+}
+
+/* alert cards */
+.list { display: grid; gap: 10px; }
+.card {
+  background: var(--surface); border: 1px solid var(--line); border-left: 4px solid var(--muted);
+  border-radius: var(--radius); min-width: 0;
+}
+.card.sev-critical { border-left-color: var(--critical); }
+.card.sev-high { border-left-color: var(--high); }
+.card.sev-medium { border-left-color: var(--medium); }
+.card > summary { list-style: none; cursor: pointer; padding: 12px 14px; display: grid; gap: 6px; }
+.card > summary::-webkit-details-marker { display: none; }
+.card-top { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; }
+.when { color: var(--muted); font-size: 12.5px; font-variant-numeric: tabular-nums; }
+.sev {
+  font: 600 10.5px/1 var(--font-mono); letter-spacing: 0.08em; text-transform: uppercase;
+  padding: 4px 7px; border-radius: 4px; color: var(--muted); background: var(--code-bg);
+}
+.sev.critical { color: var(--critical); background: var(--critical-soft); }
+.sev.high { color: var(--high); background: var(--high-soft); }
+.sev.medium { color: var(--medium); background: var(--medium-soft); }
+.rule { font-family: var(--font-mono); font-size: 11.5px; color: var(--muted); }
+.card h3 { font-size: 14.5px; font-weight: 600; line-height: 1.35; }
+.card .paths { display: grid; gap: 2px; color: var(--muted); }
+.acts { display: flex; flex-wrap: wrap; gap: 6px; }
+.act { font-size: 12px; padding: 2px 8px; border-radius: 4px; background: var(--code-bg); }
+.act.good { background: var(--ok-soft); color: var(--ok); }
+.act.warn { background: var(--high-soft); color: var(--high); }
+.act.bad { background: var(--critical-soft); color: var(--critical); }
+.more { color: var(--accent); font-size: 12.5px; }
+.card[open] .more .closed, .card:not([open]) .more .open { display: none; }
+.detail { border-top: 1px solid var(--line); padding: 12px 14px 14px; display: grid; gap: 16px; min-width: 0; }
+.detail h4 {
+  margin: 0 0 6px; font-size: 11px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted);
+}
+.scroll { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: 12.5px; }
+th, td { text-align: left; padding: 5px 10px 5px 0; vertical-align: top; border-bottom: 1px solid var(--line); }
+th { font-weight: 600; color: var(--muted); font-size: 11.5px; }
+td.t { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.chain { display: grid; gap: 4px; }
+.proc { display: grid; grid-template-columns: auto 1fr; gap: 0 10px; align-items: baseline; }
+.proc .pid { font: 12px var(--font-mono); color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.proc .cmd { font: 12.5px var(--font-mono); overflow-wrap: anywhere; min-width: 0; }
+.proc .root { color: var(--critical); font-weight: 600; }
+.proc.killed .cmd { text-decoration: line-through; text-decoration-color: var(--critical); }
+.proc.session .cmd { color: var(--muted); }
+.kept { display: grid; gap: 8px; }
+.kept-row { display: grid; gap: 2px; min-width: 0; }
+.kept-row .lbl { font-size: 12px; color: var(--muted); }
+.copyline { display: flex; gap: 8px; align-items: flex-start; min-width: 0; }
+.copyline .path { flex: 1; min-width: 0; }
+.steps { margin: 0; padding-left: 18px; display: grid; gap: 6px; }
+.steps li { max-width: 72ch; }
+.empty {
+  background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius);
+  padding: 18px; color: var(--muted);
+}
+
+/* edit history rail */
+.day { font-size: 12px; font-weight: 600; color: var(--muted); letter-spacing: 0.04em; margin: 4px 0 2px; }
+.rail { display: grid; gap: 0; border-left: 2px solid var(--line); margin-left: 6px; }
+.entry { position: relative; padding: 6px 0 12px 18px; min-width: 0; }
+.entry::before {
+  content: ""; position: absolute; left: -7px; top: 11px; width: 12px; height: 12px; border-radius: 50%;
+  background: var(--surface); border: 2px solid var(--muted);
+}
+.entry.edit::before { border-color: var(--accent); background: var(--accent-soft); }
+.entry.window::before { border-color: var(--accent); }
+.entry.sys::before { width: 8px; height: 8px; left: -5px; top: 13px; }
+.entry.alarm::before { border-color: var(--critical); background: var(--critical-soft); }
+.entry-top { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: baseline; }
+.entry .what { font-weight: 600; }
+.entry.sys .what { font-weight: 500; color: var(--muted); }
+.entry .why { color: var(--muted); font-size: 13px; overflow-wrap: anywhere; }
+.entry details { margin-top: 6px; }
+.entry details > summary { cursor: pointer; color: var(--accent); font-size: 12.5px; width: fit-content; }
+.changes { display: grid; gap: 10px; margin-top: 8px; min-width: 0; }
+.changes h5 { margin: 0 0 4px; font-size: 12px; font-weight: 600; }
+.changes ul { margin: 0; padding: 0; list-style: none; display: grid; gap: 2px; }
+.changes li { font: 12px var(--font-mono); overflow-wrap: anywhere; }
+.changes .add { color: var(--ok); }
+.changes .del { color: var(--critical); }
+.changes .chg { color: var(--high); }
+.changes .note { color: var(--muted); font: 12px var(--font-ui); }
+.foot { color: var(--muted); font-size: 12.5px; }
+.sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+@media (prefers-reduced-motion: no-preference) {
+  .card, .btn { transition: border-color 120ms ease; }
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <div class="brand"><h1>toolchain-guard</h1><span>log viewer</span></div>
+    <div class="status" id="status" aria-live="polite"></div>
+  </header>
+
+  <section class="source" id="source" aria-label="Log source">
+    <p id="source-text"></p>
+    <div class="btns">
+      <label class="btn primary" for="file">Open log file</label>
+      <input id="file" type="file" accept=".jsonl,.json,.log,.txt,application/json,text/plain" class="sr">
+      <button class="btn" id="reset" type="button" hidden>Show sample again</button>
+    </div>
+  </section>
+
+  <section class="totals" id="totals" aria-label="Totals"></section>
+
+  <section class="list" aria-labelledby="alerts-h">
+    <div class="sec-head">
+      <div><h2 id="alerts-h">Alerts</h2><div class="sub" id="alerts-sub"></div></div>
+      <div class="filters">
+        <div class="seg" role="group" aria-label="Severity" id="sev"></div>
+        <input class="search" id="q" type="search" placeholder="Filter by path, rule or command" aria-label="Filter alerts and edits">
+      </div>
+    </div>
+    <div class="list" id="alerts"></div>
+  </section>
+
+  <section aria-labelledby="edits-h" class="list">
+    <div class="sec-head">
+      <div><h2 id="edits-h">Edit history</h2>
+        <div class="sub">Changes the watcher accepted into its baseline, maintenance windows, and watcher restarts.</div></div>
+    </div>
+    <div id="edits"></div>
+  </section>
+
+  <p class="foot">This page makes no network requests. A log you open is read in your browser and never uploaded.
+    Everything in the log is shown as plain text, so file names and commands an attacker chose cannot run here.</p>
+</div>
+
+<script type="application/x-ndjson" id="sample-log">
+{"baseline_entries": 48211, "host": "dev-mbp", "mode": "enforce", "pid": 412, "rules": ["homebrew-toolchain", "pyenv", "replace-executable-on-path", "shell-startup-files", "launch-persistence", "guard-self-protection"], "ts": "2026-11-10T09:02:11+0100", "type": "started"}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 2900, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T09:03:11+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 5800, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T09:04:11+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 8700, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T09:05:11+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 11600, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T09:06:11+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 14500, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T09:07:11+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 17400, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T09:08:11+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 20300, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T09:09:11+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 23200, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T09:10:11+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 26100, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T09:11:11+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 29000, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T09:12:11+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 31900, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T09:13:11+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 34800, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T09:14:11+0100", "type": "heartbeat", "violations": 0}
+{"by": "dev", "host": "dev-mbp", "minutes": 30.0, "state": "open", "ts": "2026-11-10T09:15:03+0100", "type": "window", "until": 1794302103.0}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 37700, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T09:15:11+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 40600, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T09:16:11+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 43500, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T09:17:11+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 46400, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T09:18:11+0100", "type": "heartbeat", "violations": 0}
+{"by": "dev", "host": "dev-mbp", "minutes": null, "state": "close", "ts": "2026-11-10T09:18:40+0100", "type": "window", "until": 0}
+{"accepted_by": ["/opt/homebrew/bin/brew upgrade node", "ruby /opt/homebrew/Library/Homebrew/brew.rb upgrade node"], "changes": {"added": ["/opt/homebrew/Cellar/node/27.2.0", "/opt/homebrew/Cellar/node/27.2.0/INSTALL_RECEIPT.json", "/opt/homebrew/Cellar/node/27.2.0/bin/node", "/opt/homebrew/Cellar/node/27.2.0/include/node/node.h", "/opt/homebrew/Cellar/node/27.2.0/include/node/v8.h", "/opt/homebrew/Cellar/node/27.2.0/lib/node_modules/npm/package.json", "/opt/homebrew/Cellar/node/27.2.0/lib/node_modules/npm/bin/npm-cli.js", "/opt/homebrew/Cellar/node/27.2.0/share/man/man1/node.1", "/opt/homebrew/Cellar/node/27.2.0/sbom.spdx.json"], "changed": ["/opt/homebrew/bin/corepack", "/opt/homebrew/bin/node", "/opt/homebrew/bin/npm", "/opt/homebrew/bin/npx", "/opt/homebrew/opt/node"], "counts": {"added": 1874, "changed": 5, "removed": 1869}, "removed": ["/opt/homebrew/Cellar/node/27.1.0", "/opt/homebrew/Cellar/node/27.1.0/INSTALL_RECEIPT.json", "/opt/homebrew/Cellar/node/27.1.0/bin/node", "/opt/homebrew/Cellar/node/27.1.0/include/node/node.h", "/opt/homebrew/Cellar/node/27.1.0/include/node/v8.h", "/opt/homebrew/Cellar/node/27.1.0/lib/node_modules/npm/package.json", "/opt/homebrew/Cellar/node/27.1.0/lib/node_modules/npm/bin/npm-cli.js", "/opt/homebrew/Cellar/node/27.1.0/share/man/man1/node.1", "/opt/homebrew/Cellar/node/27.1.0/sbom.spdx.json"], "truncated": true}, "entries": 48216, "host": "dev-mbp", "kind": "full", "trigger": "maintenance window closed", "ts": "2026-11-10T09:18:41+0100", "type": "rebaselined"}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 49300, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T09:19:11+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 52200, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T09:20:11+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 55100, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T09:21:11+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 58000, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T09:22:11+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 60900, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T09:23:11+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 63800, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T09:24:11+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 66700, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T09:25:11+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 69600, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T09:26:11+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 72500, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T09:27:11+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 75400, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T09:28:11+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 78300, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T09:29:11+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 81200, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T09:30:11+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 84100, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T09:31:11+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 87000, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T09:32:11+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 89900, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T09:33:11+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 92800, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T09:34:11+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 95700, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T09:35:11+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 98600, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T09:36:11+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 101500, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T09:37:11+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 104400, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T09:38:11+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 107300, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T09:39:11+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 110200, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T09:40:11+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 113100, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T09:41:11+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 116000, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T09:42:11+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 118900, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T09:43:11+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 121800, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T09:44:11+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 124700, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T09:45:11+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 127600, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T09:46:11+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 130500, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T09:47:11+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 133400, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T09:48:11+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 136300, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T09:49:11+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 139200, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T09:50:11+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 142100, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T09:51:11+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 145000, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T09:52:11+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 147900, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T09:53:11+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 150800, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T09:54:11+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 153700, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T09:55:11+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 156600, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T09:56:11+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 159500, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T09:57:11+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 162400, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T09:58:11+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 165300, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T09:59:11+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 168200, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T10:00:11+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 171100, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T10:01:11+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 174000, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T10:02:11+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 176900, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T10:03:11+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 179800, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T10:04:11+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 182700, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T10:05:11+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 185600, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T10:06:11+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 188500, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T10:07:11+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 191400, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T10:08:11+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 194300, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T10:09:11+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 197200, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T10:10:11+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 200100, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T10:11:11+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 203000, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T10:12:11+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 205900, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T10:13:11+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 208800, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T10:14:11+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 211700, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T10:15:11+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 214600, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T10:16:11+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 217500, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T10:17:11+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 220400, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T10:18:11+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 223300, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T10:19:11+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 226200, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T10:20:11+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 229100, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T10:21:11+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 232000, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T10:22:11+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 234900, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T10:23:11+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 237800, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T10:24:11+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 240700, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T10:25:11+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 243600, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T10:26:11+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 246500, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T10:27:11+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 249400, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T10:28:11+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 252300, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T10:29:11+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 255200, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T10:30:11+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 258100, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T10:31:11+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 261000, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T10:32:11+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 263900, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T10:33:11+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 266800, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T10:34:11+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 269700, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T10:35:11+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 272600, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T10:36:11+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 275500, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T10:37:11+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 278400, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T10:38:11+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 281300, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T10:39:11+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 284200, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T10:40:11+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 287100, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T10:41:11+0100", "type": "heartbeat", "violations": 0}
+{"accepted_by": ["bash /opt/homebrew/Cellar/pyenv/2.8.0/libexec/pyenv rehash"], "changes": {"added": ["/Users/dev/.pyenv/shims/idle3.14", "/Users/dev/.pyenv/shims/pip3.14", "/Users/dev/.pyenv/shims/pydoc3.14", "/Users/dev/.pyenv/shims/python3.14"], "changed": [], "counts": {"added": 4, "changed": 0, "removed": 0}, "removed": [], "truncated": false}, "entries": 4, "host": "dev-mbp", "kind": "accepted paths", "trigger": "allowed tool", "ts": "2026-11-10T10:41:12+0100", "type": "rebaselined"}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 290000, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T10:42:11+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 292900, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T10:43:11+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 295800, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T10:44:11+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 298700, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T10:45:11+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 301600, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T10:46:11+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 304500, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T10:47:11+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 307400, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T10:48:11+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 310300, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T10:49:11+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 313200, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T10:50:11+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 316100, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T10:51:11+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 319000, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T10:52:11+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 321900, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T10:53:11+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 324800, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T10:54:11+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 327700, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T10:55:11+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 330600, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T10:56:11+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 333500, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T10:57:11+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 336400, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T10:58:11+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 339300, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T10:59:11+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 342200, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T11:00:11+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 345100, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T11:01:11+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 348000, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T11:02:11+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 350900, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T11:03:11+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 353800, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T11:04:11+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 356700, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T11:05:11+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 359600, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T11:06:11+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 362500, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T11:07:11+0100", "type": "heartbeat", "violations": 0}
+{"actions": [{"action": "snapshot", "path": "/Users/dev/.zshrc", "sha256": "31c370b05bcecb794f021cdf35cfd5c539c6378153fb81c4e5ad1677ed53a93f", "to": "/Library/Application Support/ToolchainGuard/quarantine/evidence-20261110T110745-Users__dev__.zshrc"}], "description": "Files every new shell sources", "event": "close", "host": "dev-mbp", "mode": "enforce", "paths": ["/Users/dev/.zshrc"], "process_chain": [{"args": ["vim", "/Users/dev/.zshrc"], "euid": 501, "path": "/usr/bin/vim", "pid": 23118, "ppid": 23001}, {"args": ["-zsh"], "euid": 501, "path": "/bin/zsh", "pid": 23001, "ppid": 22990}, {"args": ["login", "-pf", "dev"], "euid": 0, "path": "/usr/bin/login", "pid": 22990, "ppid": 1}], "rename_over_existing": false, "rule": "shell-startup-files", "severity": "medium", "ts": "2026-11-10T11:07:45+0100", "type": "violation"}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 365400, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T11:08:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 368300, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T11:09:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 371200, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T11:10:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 374100, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T11:11:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 377000, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T11:12:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 379900, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T11:13:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 382800, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T11:14:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 385700, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T11:15:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 388600, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T11:16:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 391500, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T11:17:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 394400, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T11:18:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 397300, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T11:19:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 400200, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T11:20:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 403100, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T11:21:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 406000, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T11:22:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 408900, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T11:23:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 411800, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T11:24:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 414700, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T11:25:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 417600, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T11:26:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 420500, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T11:27:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 423400, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T11:28:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 426300, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T11:29:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 429200, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T11:30:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 432100, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T11:31:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 435000, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T11:32:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 437900, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T11:33:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 440800, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T11:34:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 443700, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T11:35:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 446600, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T11:36:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 449500, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T11:37:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 452400, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T11:38:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 455300, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T11:39:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 458200, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T11:40:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 461100, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T11:41:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 464000, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T11:42:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 466900, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T11:43:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 469800, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T11:44:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 472700, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T11:45:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 475600, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T11:46:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 478500, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T11:47:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 481400, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T11:48:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 484300, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T11:49:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 487200, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T11:50:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 490100, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T11:51:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 493000, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T11:52:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 495900, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T11:53:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 498800, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T11:54:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 501700, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T11:55:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 504600, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T11:56:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 507500, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T11:57:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 510400, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T11:58:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 513300, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T11:59:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 516200, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T12:00:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 519100, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T12:01:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 522000, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T12:02:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 524900, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T12:03:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 527800, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T12:04:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 530700, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T12:05:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 533600, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T12:06:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 536500, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T12:07:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 539400, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T12:08:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 542300, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T12:09:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 545200, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T12:10:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 548100, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T12:11:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 551000, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T12:12:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 553900, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T12:13:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 556800, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T12:14:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 559700, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T12:15:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 562600, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T12:16:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 565500, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T12:17:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 568400, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T12:18:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 571300, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T12:19:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 574200, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T12:20:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 577100, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T12:21:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 580000, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T12:22:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 582900, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T12:23:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 585800, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T12:24:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 588700, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T12:25:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 591600, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T12:26:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 594500, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T12:27:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 597400, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T12:28:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 600300, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T12:29:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 603200, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T12:30:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 606100, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T12:31:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 609000, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T12:32:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 611900, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T12:33:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 614800, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T12:34:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 617700, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T12:35:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 620600, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T12:36:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 623500, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T12:37:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 626400, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T12:38:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 629300, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T12:39:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 632200, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T12:40:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 635100, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T12:41:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 638000, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T12:42:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 640900, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T12:43:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 643800, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T12:44:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 646700, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T12:45:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 649600, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T12:46:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 652500, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T12:47:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 655400, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T12:48:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 658300, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T12:49:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 661200, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T12:50:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 664100, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T12:51:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 667000, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T12:52:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 669900, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T12:53:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 672800, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T12:54:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 675700, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T12:55:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 678600, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T12:56:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 681500, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T12:57:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 684400, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T12:58:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 687300, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T12:59:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 690200, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T13:00:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 693100, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T13:01:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 696000, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T13:02:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 698900, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T13:03:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 701800, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T13:04:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 704700, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T13:05:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 707600, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T13:06:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 710500, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T13:07:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 713400, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T13:08:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 716300, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T13:09:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 719200, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T13:10:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 722100, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T13:11:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 725000, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T13:12:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 727900, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T13:13:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 730800, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T13:14:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 733700, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T13:15:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 736600, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T13:16:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 739500, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T13:17:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 742400, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T13:18:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 745300, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T13:19:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 748200, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T13:20:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 751100, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T13:21:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 754000, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T13:22:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 756900, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T13:23:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 759800, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T13:24:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 762700, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T13:25:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 765600, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T13:26:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 768500, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T13:27:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 771400, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T13:28:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 774300, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T13:29:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 777200, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T13:30:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 780100, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T13:31:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 783000, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T13:32:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 785900, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T13:33:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 788800, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T13:34:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 791700, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T13:35:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 794600, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T13:36:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 797500, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T13:37:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 800400, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T13:38:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 803300, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T13:39:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 806200, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T13:40:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 809100, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T13:41:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 812000, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T13:42:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 814900, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T13:43:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 817800, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T13:44:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 820700, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T13:45:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 823600, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T13:46:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 826500, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T13:47:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 829400, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T13:48:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 832300, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T13:49:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 835200, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T13:50:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 838100, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T13:51:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 841000, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T13:52:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 843900, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T13:53:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 846800, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T13:54:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 849700, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T13:55:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 852600, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T13:56:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 855500, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T13:57:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 858400, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T13:58:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 861300, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T13:59:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 864200, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T14:00:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 867100, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T14:01:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 870000, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T14:02:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 872900, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T14:03:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 875800, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T14:04:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 878700, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T14:05:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 881600, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T14:06:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 884500, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T14:07:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 887400, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T14:08:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 890300, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T14:09:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 893200, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T14:10:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 896100, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T14:11:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 899000, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T14:12:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 901900, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T14:13:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 904800, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T14:14:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 907700, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T14:15:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 910600, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T14:16:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 913500, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T14:17:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 916400, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T14:18:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 919300, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T14:19:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 922200, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T14:20:11+0100", "type": "heartbeat", "violations": 1}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 925100, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T14:21:11+0100", "type": "heartbeat", "violations": 1}
+{"actions": [{"action": "snapshot", "path": "/Users/dev/Library/LaunchAgents/com.apple.metadata.mdworker.plist", "sha256": "d4f0bc5a29de06b510f9aa428f1eedba926012b591fef7a518e776a7c9bd1824", "to": "/Library/Application Support/ToolchainGuard/quarantine/evidence-20261110T142208-Users__dev__Library__LaunchAgents__com.apple.metadata.mdworker.plist"}], "description": "New or changed launch agents and daemons", "event": "create", "host": "dev-mbp", "mode": "enforce", "paths": ["/Users/dev/Library/LaunchAgents/com.apple.metadata.mdworker.plist"], "process_chain": [{"args": ["node", "./scripts/setup.cjs"], "euid": 501, "path": "/opt/homebrew/Cellar/node/27.2.0/bin/node", "pid": 51877, "ppid": 51861}, {"args": ["sh", "-c", "node ./scripts/setup.cjs"], "euid": 501, "path": "/bin/sh", "pid": 51861, "ppid": 51840}, {"args": ["npm", "install"], "euid": 501, "path": "/opt/homebrew/Cellar/node/27.2.0/bin/node", "pid": 51840, "ppid": 50112}, {"args": ["-zsh"], "euid": 501, "path": "/bin/zsh", "pid": 50112, "ppid": 50110}, {"args": ["login", "-pf", "dev"], "euid": 0, "path": "/usr/bin/login", "pid": 50110, "ppid": 1}], "rename_over_existing": false, "rule": "launch-persistence", "severity": "high", "ts": "2026-11-10T14:22:08+0100", "type": "violation"}
+{"actions": [{"action": "killed", "pids": [51840, 51861, 51877, 51879], "root_pid": 51840}, {"action": "quarantined", "path": "/opt/homebrew/Cellar/pyenv/2.8.0/libexec/pyenv_", "reason": "not in baseline", "sha256": "7aca6784a90c48650922820554679059fcc26abf90a34a3b0b4497ec6f9815d7", "to": "/Library/Application Support/ToolchainGuard/quarantine/20261110T142209-opt__homebrew__Cellar__pyenv__2.8.0__libexec__pyenv_"}], "description": "Homebrew kegs, brew itself, and the PATH symlinks and shell completions that point into them", "event": "create", "host": "dev-mbp", "mode": "enforce", "paths": ["/opt/homebrew/Cellar/pyenv/2.8.0/libexec/pyenv_"], "process_chain": [{"args": ["node", "./scripts/setup.cjs"], "euid": 501, "path": "/opt/homebrew/Cellar/node/27.2.0/bin/node", "pid": 51877, "ppid": 51861}, {"args": ["sh", "-c", "node ./scripts/setup.cjs"], "euid": 501, "path": "/bin/sh", "pid": 51861, "ppid": 51840}, {"args": ["npm", "install"], "euid": 501, "path": "/opt/homebrew/Cellar/node/27.2.0/bin/node", "pid": 51840, "ppid": 50112}, {"args": ["-zsh"], "euid": 501, "path": "/bin/zsh", "pid": 50112, "ppid": 50110}, {"args": ["login", "-pf", "dev"], "euid": 0, "path": "/usr/bin/login", "pid": 50110, "ppid": 1}], "rename_over_existing": false, "rule": "homebrew-toolchain", "severity": "critical", "ts": "2026-11-10T14:22:09+0100", "type": "violation"}
+{"actions": [{"action": "killed", "pids": [51840, 51861, 51877], "root_pid": 51840}, {"action": "restored", "path": "/opt/homebrew/Cellar/pyenv/2.8.0/libexec/pyenv"}], "description": "Homebrew kegs, brew itself, and the PATH symlinks and shell completions that point into them", "event": "unlink", "host": "dev-mbp", "mode": "enforce", "paths": ["/opt/homebrew/Cellar/pyenv/2.8.0/libexec/pyenv"], "process_chain": [{"args": ["node", "./scripts/setup.cjs"], "euid": 501, "path": "/opt/homebrew/Cellar/node/27.2.0/bin/node", "pid": 51877, "ppid": 51861}, {"args": ["sh", "-c", "node ./scripts/setup.cjs"], "euid": 501, "path": "/bin/sh", "pid": 51861, "ppid": 51840}, {"args": ["npm", "install"], "euid": 501, "path": "/opt/homebrew/Cellar/node/27.2.0/bin/node", "pid": 51840, "ppid": 50112}, {"args": ["-zsh"], "euid": 501, "path": "/bin/zsh", "pid": 50112, "ppid": 50110}, {"args": ["login", "-pf", "dev"], "euid": 0, "path": "/usr/bin/login", "pid": 50110, "ppid": 1}], "rename_over_existing": false, "rule": "homebrew-toolchain", "severity": "critical", "ts": "2026-11-10T14:22:09+0100", "type": "violation"}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 928000, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T14:22:11+0100", "type": "heartbeat", "violations": 4}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 930900, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T14:23:11+0100", "type": "heartbeat", "violations": 4}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 933800, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T14:24:11+0100", "type": "heartbeat", "violations": 4}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 936700, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T14:25:11+0100", "type": "heartbeat", "violations": 4}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 939600, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T14:26:11+0100", "type": "heartbeat", "violations": 4}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 942500, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T14:27:11+0100", "type": "heartbeat", "violations": 4}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 945400, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T14:28:11+0100", "type": "heartbeat", "violations": 4}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 948300, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T14:29:11+0100", "type": "heartbeat", "violations": 4}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 951200, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T14:30:11+0100", "type": "heartbeat", "violations": 4}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 954100, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T14:31:11+0100", "type": "heartbeat", "violations": 4}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 957000, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T14:32:11+0100", "type": "heartbeat", "violations": 4}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 959900, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T14:33:11+0100", "type": "heartbeat", "violations": 4}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 962800, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T14:34:11+0100", "type": "heartbeat", "violations": 4}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 965700, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T14:35:11+0100", "type": "heartbeat", "violations": 4}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 968600, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T14:36:11+0100", "type": "heartbeat", "violations": 4}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 971500, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T14:37:11+0100", "type": "heartbeat", "violations": 4}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 974400, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T14:38:11+0100", "type": "heartbeat", "violations": 4}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 977300, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T14:39:11+0100", "type": "heartbeat", "violations": 4}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 980200, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T14:40:11+0100", "type": "heartbeat", "violations": 4}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 983100, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T14:41:11+0100", "type": "heartbeat", "violations": 4}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 986000, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T14:42:11+0100", "type": "heartbeat", "violations": 4}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 988900, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T14:43:11+0100", "type": "heartbeat", "violations": 4}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 991800, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T14:44:11+0100", "type": "heartbeat", "violations": 4}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 994700, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T14:45:11+0100", "type": "heartbeat", "violations": 4}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 997600, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T14:46:11+0100", "type": "heartbeat", "violations": 4}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 1000500, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T14:47:11+0100", "type": "heartbeat", "violations": 4}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 1003400, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T14:48:11+0100", "type": "heartbeat", "violations": 4}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 1006300, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T14:49:11+0100", "type": "heartbeat", "violations": 4}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 1009200, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T14:50:11+0100", "type": "heartbeat", "violations": 4}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 1012100, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T14:51:11+0100", "type": "heartbeat", "violations": 4}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 1015000, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T14:52:11+0100", "type": "heartbeat", "violations": 4}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 1017900, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T14:53:11+0100", "type": "heartbeat", "violations": 4}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 1020800, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T14:54:11+0100", "type": "heartbeat", "violations": 4}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 1023700, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T14:55:11+0100", "type": "heartbeat", "violations": 4}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 1026600, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T14:56:11+0100", "type": "heartbeat", "violations": 4}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 1029500, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T14:57:11+0100", "type": "heartbeat", "violations": 4}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 1032400, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T14:58:11+0100", "type": "heartbeat", "violations": 4}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 1035300, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T14:59:11+0100", "type": "heartbeat", "violations": 4}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 1038200, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T15:00:11+0100", "type": "heartbeat", "violations": 4}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 1041100, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T15:01:11+0100", "type": "heartbeat", "violations": 4}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 1044000, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T15:02:11+0100", "type": "heartbeat", "violations": 4}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 1046900, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T15:03:11+0100", "type": "heartbeat", "violations": 4}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 1049800, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T15:04:11+0100", "type": "heartbeat", "violations": 4}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 1052700, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T15:05:11+0100", "type": "heartbeat", "violations": 4}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 1055600, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T15:06:11+0100", "type": "heartbeat", "violations": 4}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 1058500, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T15:07:11+0100", "type": "heartbeat", "violations": 4}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 1061400, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T15:08:11+0100", "type": "heartbeat", "violations": 4}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 1064300, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T15:09:11+0100", "type": "heartbeat", "violations": 4}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 1067200, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T15:10:11+0100", "type": "heartbeat", "violations": 4}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 1070100, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T15:11:11+0100", "type": "heartbeat", "violations": 4}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 1073000, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T15:12:11+0100", "type": "heartbeat", "violations": 4}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 1075900, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T15:13:11+0100", "type": "heartbeat", "violations": 4}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 1078800, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T15:14:11+0100", "type": "heartbeat", "violations": 4}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 1081700, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T15:15:11+0100", "type": "heartbeat", "violations": 4}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 1084600, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T15:16:11+0100", "type": "heartbeat", "violations": 4}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 1087500, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T15:17:11+0100", "type": "heartbeat", "violations": 4}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 1090400, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T15:18:11+0100", "type": "heartbeat", "violations": 4}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 1093300, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T15:19:11+0100", "type": "heartbeat", "violations": 4}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 1096200, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T15:20:11+0100", "type": "heartbeat", "violations": 4}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 1099100, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T15:21:11+0100", "type": "heartbeat", "violations": 4}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 1102000, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T15:22:11+0100", "type": "heartbeat", "violations": 4}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 1104900, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T15:23:11+0100", "type": "heartbeat", "violations": 4}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 1107800, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T15:24:11+0100", "type": "heartbeat", "violations": 4}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 1110700, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T15:25:11+0100", "type": "heartbeat", "violations": 4}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 1113600, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T15:26:11+0100", "type": "heartbeat", "violations": 4}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 1116500, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T15:27:11+0100", "type": "heartbeat", "violations": 4}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 1119400, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T15:28:11+0100", "type": "heartbeat", "violations": 4}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 1122300, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T15:29:11+0100", "type": "heartbeat", "violations": 4}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 1125200, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T15:30:11+0100", "type": "heartbeat", "violations": 4}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 1128100, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T15:31:11+0100", "type": "heartbeat", "violations": 4}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 1131000, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T15:32:11+0100", "type": "heartbeat", "violations": 4}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 1133900, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T15:33:11+0100", "type": "heartbeat", "violations": 4}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 1136800, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T15:34:11+0100", "type": "heartbeat", "violations": 4}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 1139700, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T15:35:11+0100", "type": "heartbeat", "violations": 4}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 1142600, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T15:36:11+0100", "type": "heartbeat", "violations": 4}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 1145500, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T15:37:11+0100", "type": "heartbeat", "violations": 4}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 1148400, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T15:38:11+0100", "type": "heartbeat", "violations": 4}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 1151300, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T15:39:11+0100", "type": "heartbeat", "violations": 4}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 1154200, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T15:40:11+0100", "type": "heartbeat", "violations": 4}
+{"actions": [{"action": "snapshot", "path": "/Users/dev/.local/bin/uv", "sha256": "e6184ce10e266134fdcfa401e8f1a95005bcd4f18d16b62b757323e2833fe9a9", "to": "/Library/Application Support/ToolchainGuard/quarantine/evidence-20261110T154030-Users__dev__.local__bin__uv"}], "description": "A file renamed over an existing file in a user PATH directory (the pyenv_ -> pyenv pattern)", "event": "rename", "host": "dev-mbp", "mode": "enforce", "paths": ["/Users/dev/.local/bin/uv"], "process_chain": [{"args": ["/Users/dev/.local/bin/uv", "self", "update"], "euid": 501, "path": "/Users/dev/.local/bin/uv", "pid": 58004, "ppid": 57990}, {"args": ["-zsh"], "euid": 501, "path": "/bin/zsh", "pid": 57990, "ppid": 57988}, {"args": ["login", "-pf", "dev"], "euid": 0, "path": "/usr/bin/login", "pid": 57988, "ppid": 1}], "rename_over_existing": true, "rule": "replace-executable-on-path", "severity": "high", "ts": "2026-11-10T15:40:30+0100", "type": "violation"}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 1157100, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T15:41:11+0100", "type": "heartbeat", "violations": 5}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 1160000, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T15:42:11+0100", "type": "heartbeat", "violations": 5}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 1162900, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T15:43:11+0100", "type": "heartbeat", "violations": 5}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 1165800, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T15:44:11+0100", "type": "heartbeat", "violations": 5}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 1168700, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T15:45:11+0100", "type": "heartbeat", "violations": 5}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 1171600, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T15:46:11+0100", "type": "heartbeat", "violations": 5}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 1174500, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T15:47:11+0100", "type": "heartbeat", "violations": 5}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 1177400, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T15:48:11+0100", "type": "heartbeat", "violations": 5}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 1180300, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T15:49:11+0100", "type": "heartbeat", "violations": 5}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 1183200, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T15:50:11+0100", "type": "heartbeat", "violations": 5}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 1186100, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T15:51:11+0100", "type": "heartbeat", "violations": 5}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 1189000, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T15:52:11+0100", "type": "heartbeat", "violations": 5}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 1191900, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T15:53:11+0100", "type": "heartbeat", "violations": 5}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 1194800, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T15:54:11+0100", "type": "heartbeat", "violations": 5}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 1197700, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T15:55:11+0100", "type": "heartbeat", "violations": 5}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 1200600, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T15:56:11+0100", "type": "heartbeat", "violations": 5}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 1203500, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T15:57:11+0100", "type": "heartbeat", "violations": 5}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 1206400, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T15:58:11+0100", "type": "heartbeat", "violations": 5}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 1209300, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T15:59:11+0100", "type": "heartbeat", "violations": 5}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 1212200, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T16:00:11+0100", "type": "heartbeat", "violations": 5}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 1215100, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T16:01:11+0100", "type": "heartbeat", "violations": 5}
+{"baseline_entries": 48216, "eslogger_pid": 415, "events": 1218000, "host": "dev-mbp", "mode": "enforce", "pid": 412, "ts": "2026-11-10T16:02:11+0100", "type": "heartbeat", "violations": 5}
+{"detail": "signal 9 sent to watcher pid 412", "host": "dev-mbp", "process_chain": [{"args": ["kill", "-9", "412"], "euid": 0, "path": "/bin/kill", "pid": 60233, "ppid": 60230}, {"args": ["sh", "-c", "kill -9 412; ln -sf /private/tmp/.cache/python3 /opt/homebrew/bin/python3"], "euid": 0, "path": "/bin/sh", "pid": 60230, "ppid": 60101}, {"args": ["/Users/dev/Downloads/MeetingAssist.app/Contents/MacOS/MeetingAssist"], "euid": 501, "path": "/Users/dev/Downloads/MeetingAssist.app/Contents/MacOS/MeetingAssist", "pid": 60101, "ppid": 1}], "severity": "critical", "ts": "2026-11-10T16:03:01+0100", "type": "tamper_attempt"}
+{"detail": "previous watcher instance ended without a clean shutdown (killed?); restarted", "host": "dev-mbp", "process_chain": [], "severity": "high", "ts": "2026-11-10T16:03:06+0100", "type": "tamper_attempt"}
+{"baseline_entries": 48216, "host": "dev-mbp", "mode": "enforce", "pid": 60301, "rules": ["homebrew-toolchain", "pyenv", "replace-executable-on-path", "shell-startup-files", "launch-persistence", "guard-self-protection"], "ts": "2026-11-10T16:03:06+0100", "type": "started"}
+{"actions": [{"action": "quarantined", "path": "/opt/homebrew/bin/python3", "reason": "modified", "to": "/Library/Application Support/ToolchainGuard/quarantine/20261110T160307-opt__homebrew__bin__python3"}, {"action": "restored", "path": "/opt/homebrew/bin/python3"}], "detected_by": "startup scan", "host": "dev-mbp", "mode": "enforce", "note": "found by scan, so no process attribution", "path": "/opt/homebrew/bin/python3", "rule": "homebrew-toolchain", "severity": "critical", "ts": "2026-11-10T16:03:07+0100", "type": "drift"}
+{"baseline_entries": 48216, "eslogger_pid": 60304, "events": 2900, "host": "dev-mbp", "mode": "enforce", "pid": 60301, "ts": "2026-11-10T16:04:06+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 60304, "events": 5800, "host": "dev-mbp", "mode": "enforce", "pid": 60301, "ts": "2026-11-10T16:05:06+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 60304, "events": 8700, "host": "dev-mbp", "mode": "enforce", "pid": 60301, "ts": "2026-11-10T16:06:06+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 60304, "events": 11600, "host": "dev-mbp", "mode": "enforce", "pid": 60301, "ts": "2026-11-10T16:07:06+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 60304, "events": 14500, "host": "dev-mbp", "mode": "enforce", "pid": 60301, "ts": "2026-11-10T16:08:06+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 60304, "events": 17400, "host": "dev-mbp", "mode": "enforce", "pid": 60301, "ts": "2026-11-10T16:09:06+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 60304, "events": 20300, "host": "dev-mbp", "mode": "enforce", "pid": 60301, "ts": "2026-11-10T16:10:06+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 60304, "events": 23200, "host": "dev-mbp", "mode": "enforce", "pid": 60301, "ts": "2026-11-10T16:11:06+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 60304, "events": 26100, "host": "dev-mbp", "mode": "enforce", "pid": 60301, "ts": "2026-11-10T16:12:06+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 60304, "events": 29000, "host": "dev-mbp", "mode": "enforce", "pid": 60301, "ts": "2026-11-10T16:13:06+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 60304, "events": 31900, "host": "dev-mbp", "mode": "enforce", "pid": 60301, "ts": "2026-11-10T16:14:06+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 60304, "events": 34800, "host": "dev-mbp", "mode": "enforce", "pid": 60301, "ts": "2026-11-10T16:15:06+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 60304, "events": 37700, "host": "dev-mbp", "mode": "enforce", "pid": 60301, "ts": "2026-11-10T16:16:06+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 60304, "events": 40600, "host": "dev-mbp", "mode": "enforce", "pid": 60301, "ts": "2026-11-10T16:17:06+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 60304, "events": 43500, "host": "dev-mbp", "mode": "enforce", "pid": 60301, "ts": "2026-11-10T16:18:06+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 60304, "events": 46400, "host": "dev-mbp", "mode": "enforce", "pid": 60301, "ts": "2026-11-10T16:19:06+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 60304, "events": 49300, "host": "dev-mbp", "mode": "enforce", "pid": 60301, "ts": "2026-11-10T16:20:06+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 60304, "events": 52200, "host": "dev-mbp", "mode": "enforce", "pid": 60301, "ts": "2026-11-10T16:21:06+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 60304, "events": 55100, "host": "dev-mbp", "mode": "enforce", "pid": 60301, "ts": "2026-11-10T16:22:06+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 60304, "events": 58000, "host": "dev-mbp", "mode": "enforce", "pid": 60301, "ts": "2026-11-10T16:23:06+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 60304, "events": 60900, "host": "dev-mbp", "mode": "enforce", "pid": 60301, "ts": "2026-11-10T16:24:06+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 60304, "events": 63800, "host": "dev-mbp", "mode": "enforce", "pid": 60301, "ts": "2026-11-10T16:25:06+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 60304, "events": 66700, "host": "dev-mbp", "mode": "enforce", "pid": 60301, "ts": "2026-11-10T16:26:06+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 60304, "events": 69600, "host": "dev-mbp", "mode": "enforce", "pid": 60301, "ts": "2026-11-10T16:27:06+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 60304, "events": 72500, "host": "dev-mbp", "mode": "enforce", "pid": 60301, "ts": "2026-11-10T16:28:06+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 60304, "events": 75400, "host": "dev-mbp", "mode": "enforce", "pid": 60301, "ts": "2026-11-10T16:29:06+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 60304, "events": 78300, "host": "dev-mbp", "mode": "enforce", "pid": 60301, "ts": "2026-11-10T16:30:06+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 60304, "events": 81200, "host": "dev-mbp", "mode": "enforce", "pid": 60301, "ts": "2026-11-10T16:31:06+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 60304, "events": 84100, "host": "dev-mbp", "mode": "enforce", "pid": 60301, "ts": "2026-11-10T16:32:06+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 60304, "events": 87000, "host": "dev-mbp", "mode": "enforce", "pid": 60301, "ts": "2026-11-10T16:33:06+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 60304, "events": 89900, "host": "dev-mbp", "mode": "enforce", "pid": 60301, "ts": "2026-11-10T16:34:06+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 60304, "events": 92800, "host": "dev-mbp", "mode": "enforce", "pid": 60301, "ts": "2026-11-10T16:35:06+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 60304, "events": 95700, "host": "dev-mbp", "mode": "enforce", "pid": 60301, "ts": "2026-11-10T16:36:06+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 60304, "events": 98600, "host": "dev-mbp", "mode": "enforce", "pid": 60301, "ts": "2026-11-10T16:37:06+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 60304, "events": 101500, "host": "dev-mbp", "mode": "enforce", "pid": 60301, "ts": "2026-11-10T16:38:06+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 60304, "events": 104400, "host": "dev-mbp", "mode": "enforce", "pid": 60301, "ts": "2026-11-10T16:39:06+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 60304, "events": 107300, "host": "dev-mbp", "mode": "enforce", "pid": 60301, "ts": "2026-11-10T16:40:06+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 60304, "events": 110200, "host": "dev-mbp", "mode": "enforce", "pid": 60301, "ts": "2026-11-10T16:41:06+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 60304, "events": 113100, "host": "dev-mbp", "mode": "enforce", "pid": 60301, "ts": "2026-11-10T16:42:06+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 60304, "events": 116000, "host": "dev-mbp", "mode": "enforce", "pid": 60301, "ts": "2026-11-10T16:43:06+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 60304, "events": 118900, "host": "dev-mbp", "mode": "enforce", "pid": 60301, "ts": "2026-11-10T16:44:06+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 60304, "events": 121800, "host": "dev-mbp", "mode": "enforce", "pid": 60301, "ts": "2026-11-10T16:45:06+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 60304, "events": 124700, "host": "dev-mbp", "mode": "enforce", "pid": 60301, "ts": "2026-11-10T16:46:06+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 60304, "events": 127600, "host": "dev-mbp", "mode": "enforce", "pid": 60301, "ts": "2026-11-10T16:47:06+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 60304, "events": 130500, "host": "dev-mbp", "mode": "enforce", "pid": 60301, "ts": "2026-11-10T16:48:06+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 60304, "events": 133400, "host": "dev-mbp", "mode": "enforce", "pid": 60301, "ts": "2026-11-10T16:49:06+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 60304, "events": 136300, "host": "dev-mbp", "mode": "enforce", "pid": 60301, "ts": "2026-11-10T16:50:06+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 60304, "events": 139200, "host": "dev-mbp", "mode": "enforce", "pid": 60301, "ts": "2026-11-10T16:51:06+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 60304, "events": 142100, "host": "dev-mbp", "mode": "enforce", "pid": 60301, "ts": "2026-11-10T16:52:06+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 60304, "events": 145000, "host": "dev-mbp", "mode": "enforce", "pid": 60301, "ts": "2026-11-10T16:53:06+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 60304, "events": 147900, "host": "dev-mbp", "mode": "enforce", "pid": 60301, "ts": "2026-11-10T16:54:06+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 60304, "events": 150800, "host": "dev-mbp", "mode": "enforce", "pid": 60301, "ts": "2026-11-10T16:55:06+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 60304, "events": 153700, "host": "dev-mbp", "mode": "enforce", "pid": 60301, "ts": "2026-11-10T16:56:06+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 60304, "events": 156600, "host": "dev-mbp", "mode": "enforce", "pid": 60301, "ts": "2026-11-10T16:57:06+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 60304, "events": 159500, "host": "dev-mbp", "mode": "enforce", "pid": 60301, "ts": "2026-11-10T16:58:06+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 60304, "events": 162400, "host": "dev-mbp", "mode": "enforce", "pid": 60301, "ts": "2026-11-10T16:59:06+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 60304, "events": 165300, "host": "dev-mbp", "mode": "enforce", "pid": 60301, "ts": "2026-11-10T17:00:06+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 60304, "events": 168200, "host": "dev-mbp", "mode": "enforce", "pid": 60301, "ts": "2026-11-10T17:01:06+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 60304, "events": 171100, "host": "dev-mbp", "mode": "enforce", "pid": 60301, "ts": "2026-11-10T17:02:06+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 60304, "events": 174000, "host": "dev-mbp", "mode": "enforce", "pid": 60301, "ts": "2026-11-10T17:03:06+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 60304, "events": 176900, "host": "dev-mbp", "mode": "enforce", "pid": 60301, "ts": "2026-11-10T17:04:06+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 60304, "events": 179800, "host": "dev-mbp", "mode": "enforce", "pid": 60301, "ts": "2026-11-10T17:05:06+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 60304, "events": 182700, "host": "dev-mbp", "mode": "enforce", "pid": 60301, "ts": "2026-11-10T17:06:06+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 60304, "events": 185600, "host": "dev-mbp", "mode": "enforce", "pid": 60301, "ts": "2026-11-10T17:07:06+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 60304, "events": 188500, "host": "dev-mbp", "mode": "enforce", "pid": 60301, "ts": "2026-11-10T17:08:06+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 60304, "events": 191400, "host": "dev-mbp", "mode": "enforce", "pid": 60301, "ts": "2026-11-10T17:09:06+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 60304, "events": 194300, "host": "dev-mbp", "mode": "enforce", "pid": 60301, "ts": "2026-11-10T17:10:06+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 60304, "events": 197200, "host": "dev-mbp", "mode": "enforce", "pid": 60301, "ts": "2026-11-10T17:11:06+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 60304, "events": 200100, "host": "dev-mbp", "mode": "enforce", "pid": 60301, "ts": "2026-11-10T17:12:06+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 60304, "events": 203000, "host": "dev-mbp", "mode": "enforce", "pid": 60301, "ts": "2026-11-10T17:13:06+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 60304, "events": 205900, "host": "dev-mbp", "mode": "enforce", "pid": 60301, "ts": "2026-11-10T17:14:06+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 60304, "events": 208800, "host": "dev-mbp", "mode": "enforce", "pid": 60301, "ts": "2026-11-10T17:15:06+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 60304, "events": 211700, "host": "dev-mbp", "mode": "enforce", "pid": 60301, "ts": "2026-11-10T17:16:06+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 60304, "events": 214600, "host": "dev-mbp", "mode": "enforce", "pid": 60301, "ts": "2026-11-10T17:17:06+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 60304, "events": 217500, "host": "dev-mbp", "mode": "enforce", "pid": 60301, "ts": "2026-11-10T17:18:06+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 60304, "events": 220400, "host": "dev-mbp", "mode": "enforce", "pid": 60301, "ts": "2026-11-10T17:19:06+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 60304, "events": 223300, "host": "dev-mbp", "mode": "enforce", "pid": 60301, "ts": "2026-11-10T17:20:06+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 60304, "events": 226200, "host": "dev-mbp", "mode": "enforce", "pid": 60301, "ts": "2026-11-10T17:21:06+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 60304, "events": 229100, "host": "dev-mbp", "mode": "enforce", "pid": 60301, "ts": "2026-11-10T17:22:06+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 60304, "events": 232000, "host": "dev-mbp", "mode": "enforce", "pid": 60301, "ts": "2026-11-10T17:23:06+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 60304, "events": 234900, "host": "dev-mbp", "mode": "enforce", "pid": 60301, "ts": "2026-11-10T17:24:06+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 60304, "events": 237800, "host": "dev-mbp", "mode": "enforce", "pid": 60301, "ts": "2026-11-10T17:25:06+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 60304, "events": 240700, "host": "dev-mbp", "mode": "enforce", "pid": 60301, "ts": "2026-11-10T17:26:06+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 60304, "events": 243600, "host": "dev-mbp", "mode": "enforce", "pid": 60301, "ts": "2026-11-10T17:27:06+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 60304, "events": 246500, "host": "dev-mbp", "mode": "enforce", "pid": 60301, "ts": "2026-11-10T17:28:06+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 60304, "events": 249400, "host": "dev-mbp", "mode": "enforce", "pid": 60301, "ts": "2026-11-10T17:29:06+0100", "type": "heartbeat", "violations": 0}
+{"baseline_entries": 48216, "eslogger_pid": 60304, "events": 252300, "host": "dev-mbp", "mode": "enforce", "pid": 60301, "ts": "2026-11-10T17:30:06+0100", "type": "heartbeat", "violations": 0}
+</script>
+<script>
+(function () {
+  "use strict";
+
+  var LOG_PATH = "/var/log/toolchain-guard.jsonl";
+  var ALERT_TYPES = { violation: 1, drift: 1, tamper_attempt: 1, error: 1, warning: 1 };
+  var EDIT_TYPES = { window: 1, rebaselined: 1, baselined: 1, started: 1, stopped: 1,
+                     stop_authorized: 1, started_after_reboot: 1 };
+  var SEV_RANK = { critical: 4, high: 3, medium: 2, low: 1, info: 0 };
+  var SESSION = { login: 1, sshd: 1, launchd: 1, terminal: 1, iterm2: 1, tmux: 1, screen: 1 };
+  var RULE_LABEL = {
+    "homebrew-toolchain": "Homebrew",
+    "pyenv": "pyenv",
+    "launch-persistence": "a launch agent",
+    "shell-startup-files": "a shell startup file",
+    "replace-executable-on-path": "an executable on PATH",
+    "guard-self-protection": "the watcher's own files",
+    "homebrew-bytecode": "Python bytecode under Homebrew",
+    "python-startup-hooks": "a Python startup hook",
+    "developer-tool-hooks": "developer tool config",
+    "system-auth-and-persistence": "system auth or persistence config",
+    "credential-access": "a credential store"
+  };
+
+  var state = { records: [], bad: 0, source: "sample", fileName: "", error: "", q: "", sev: "all" };
+
+  // ------------------------------------------------------------ DOM helper (text only, never HTML)
+  function h(tag, props) {
+    var el = document.createElement(tag);
+    if (props) {
+      for (var k in props) {
+        if (!Object.prototype.hasOwnProperty.call(props, k) || props[k] == null) continue;
+        if (k === "class") el.className = props[k];
+        else if (k === "text") el.textContent = props[k];
+        else el.setAttribute(k, props[k]);
+      }
+    }
+    for (var i = 2; i < arguments.length; i++) add(el, arguments[i]);
+    return el;
+  }
+  function add(el, c) {
+    if (c == null || c === false) return;
+    if (Array.isArray(c)) { c.forEach(function (x) { add(el, x); }); return; }
+    el.appendChild(typeof c === "object" ? c : document.createTextNode(String(c)));
+  }
+  function clear(el) { while (el.firstChild) el.removeChild(el.firstChild); }
+
+  // ------------------------------------------------------------ parsing
+  function tsValue(ts) {
+    if (typeof ts !== "string") return 0;
+    var v = Date.parse(ts.replace(/([+-]\d{2})(\d{2})$/, "$1:$2"));
+    return isNaN(v) ? 0 : v;
+  }
+  function wall(ts) {
+    var m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}:\d{2}:\d{2})/.exec(ts || "");
+    return m ? { date: m[1] + "-" + m[2] + "-" + m[3], time: m[4] } : { date: "", time: String(ts || "") };
+  }
+  function dayLabel(d) {
+    var p = d.split("-");
+    if (p.length !== 3) return d || "Unknown date";
+    var dt = new Date(Date.UTC(+p[0], +p[1] - 1, +p[2]));
+    return dt.toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short", year: "numeric", timeZone: "UTC" });
+  }
+  function parseLog(text) {
+    var out = [], bad = 0;
+    text.split(/\r?\n/).forEach(function (line, i) {
+      var s = line.trim();
+      if (!s) return;
+      try {
+        var r = JSON.parse(s);
+        if (r && typeof r === "object" && !Array.isArray(r) && typeof r.type === "string") {
+          r._i = i; r._t = tsValue(r.ts); out.push(r);
+        } else bad++;
+      } catch (e) { bad++; }
+    });
+    out.sort(function (a, b) { return (a._t - b._t) || (a._i - b._i); });
+    return { records: out, bad: bad };
+  }
+
+  // ------------------------------------------------------------ helpers
+  function base(p) { p = String(p || ""); var i = p.lastIndexOf("/"); return i >= 0 ? p.slice(i + 1) : p; }
+  function num(n) { return Number(n || 0).toLocaleString("en-US"); }
+  function plural(n, one, many) { return num(n) + " " + (n === 1 ? one : (many || one + "s")); }
+  function rank(s) { return SEV_RANK[s] != null ? SEV_RANK[s] : 0; }
+  function cmdOf(p) {
+    if (!p) return "";
+    var a = Array.isArray(p.args) ? p.args : [];
+    return a.length ? a.join(" ") : (p.path || "");
+  }
+  function progName(p) {
+    if (!p) return "";
+    var a = Array.isArray(p.args) ? p.args : [];
+    var first = base(a[0] || p.path || "");
+    // "node ./scripts/setup.cjs" reads better than "node"; "npm install" better than "npm"
+    if (a.length > 1 && /^(node|npm|npx|pnpm|yarn|python\d*(\.\d+)?|ruby|perl|bash|sh|zsh|uv|pip\d*)$/.test(first)) {
+      return first + " " + a.slice(1, 3).join(" ");
+    }
+    return first;
+  }
+  function isSession(p) {
+    var a0 = (p.args && p.args[0]) || "";
+    return a0.charAt(0) === "-" || !!SESSION[base(p.path || a0).toLowerCase()] || !p.pid || p.pid <= 1;
+  }
+  function scriptPids(r) {
+    var out = {};
+    (r.process_chain || []).some(function (p) {
+      if (isSession(p)) return true;
+      out[p.pid] = 1; return false;
+    });
+    (r.actions || []).forEach(function (a) {
+      if (a.root_pid) out[a.root_pid] = 1;
+      (a.pids || []).forEach(function (x) { out[x] = 1; });
+    });
+    return out;
+  }
+  function overlaps(a, b) { for (var k in a) if (b[k]) return true; return false; }
+
+  // ------------------------------------------------------------ incidents
+  function buildIncidents(records) {
+    var incidents = [], last = null;
+    records.forEach(function (r) {
+      if (!ALERT_TYPES[r.type]) return;
+      var pids = scriptPids(r);
+      var isProc = r.type === "violation";
+      var join = last && (r._t - last.end) <= 60000 && (
+        (isProc && last.kind === "proc" && overlaps(pids, last.pids)) ||
+        (!isProc && last.kind === "watcher" && (r.type === "tamper_attempt" || r.type === "drift"))
+      );
+      if (!join) {
+        last = { items: [], pids: {}, kind: isProc ? "proc" : (r.type === "tamper_attempt" || r.type === "drift") ? "watcher" : "other",
+                 start: r._t, end: r._t, ts: r.ts };
+        incidents.push(last);
+      }
+      last.items.push(r);
+      last.end = r._t;
+      for (var k in pids) last.pids[k] = 1;
+    });
+    incidents.forEach(summarize);
+    return incidents;
+  }
+
+  function summarize(inc) {
+    var killed = {}, killedRoot = null, sev = "info", rules = {}, paths = [], kept = [], counts = {
+      restored: 0, quarantined: 0, snapshot: 0, would_kill: 0, would_revert: 0, failed: 0, impossible: 0, mode_restored: 0
+    }, hints = [], audit = false, chain = null;
+    inc.items.forEach(function (r) {
+      var s = r.severity || (r.type === "error" ? "high" : "info");
+      if (rank(s) > rank(sev)) sev = s;
+      if (r.rule) rules[r.rule] = 1;
+      if (r.mode === "audit") audit = true;
+      (r.paths || (r.path ? [r.path] : [])).forEach(function (p) { if (paths.indexOf(p) < 0) paths.push(p); });
+      if (!chain && r.process_chain && r.process_chain.length) chain = r.process_chain;
+      (r.actions || []).forEach(function (a) {
+        switch (a.action) {
+          case "killed":
+            if (killedRoot == null) killedRoot = a.root_pid;
+            (a.pids || []).forEach(function (p) { killed[p] = 1; });
+            break;
+          case "would_kill": counts.would_kill++; if (killedRoot == null) killedRoot = a.root_pid; break;
+          case "would_revert": counts.would_revert++; break;
+          case "restored": counts.restored++; break;
+          case "mode_restored": counts.mode_restored++; break;
+          case "quarantined": counts.quarantined++; kept.push({ kind: "Quarantined (moved out, not executable)", a: a }); break;
+          case "snapshot": counts.snapshot++; kept.push({ kind: "Snapshot (copy; the file was left in place)", a: a }); break;
+          case "restore_impossible": counts.impossible++; hints.push(a.hint || "reinstall the tool that owns this file"); break;
+          default:
+            if (/failed$/.test(a.action || "")) { counts.failed++; hints.push((a.action || "") + ": " + (a.error || "")); }
+        }
+      });
+    });
+    inc.sev = sev; inc.rules = Object.keys(rules); inc.paths = paths; inc.kept = kept;
+    inc.killed = Object.keys(killed).map(Number); inc.killedRoot = killedRoot; inc.counts = counts;
+    inc.hints = hints; inc.audit = audit; inc.chain = chain || [];
+    inc.title = titleFor(inc);
+    inc.text = JSON.stringify(inc.items).toLowerCase();
+  }
+
+  function rootProc(inc) {
+    var found = null;
+    inc.chain.forEach(function (p) { if (p.pid === inc.killedRoot) found = p; });
+    return found || inc.chain[0] || null;
+  }
+  function joinLabels(labels) {
+    if (labels.length <= 1) return labels[0] || "protected files";
+    return labels.slice(0, -1).join(", ") + " and " + labels[labels.length - 1];
+  }
+  function titleFor(inc) {
+    var first = inc.items[0];
+    if (inc.kind === "watcher") {
+      var signal = inc.items.filter(function (r) { return /^signal /.test(r.detail || ""); })[0];
+      var drift = inc.items.filter(function (r) { return r.type === "drift"; });
+      var unclean = /clean shutdown/.test(first.detail || "");
+      var head = signal ? "The watcher was killed" : (first.type === "drift" ? "A scan found changed files nobody was watching"
+        : unclean ? "The watcher restarted after an unclean stop" : "Tamper attempt: " + (first.detail || "see the raw record"));
+      if (signal && drift.length) head += ", and " + plural(drift.length, "file") + " changed while it was down";
+      else if (!signal && drift.length && first.type !== "drift") head += "; its scan found " + plural(drift.length, "changed file");
+      return head;
+    }
+    if (first.type === "error" || first.type === "warning") {
+      return (first.type === "error" ? "Watcher error: " : "Watcher warning: ") + (first.detail || first.error || "see the raw record");
+    }
+    var labels = inc.rules.map(function (r) { return RULE_LABEL[r] || r; });
+    var who = progName(rootProc(inc)) || "A process";
+    if (first.rule_type === "event") return (first.description || first.rule) + " (" + who + ")";
+    if (first.rule_type === "exec") {
+      var cmd = "a suspicious command: " + (first.description || first.rule);
+      if (inc.killed.length) return "Killed " + who + ": it ran " + cmd;
+      if (inc.counts.would_kill) return "Would have killed " + who + " (audit mode): it ran " + cmd;
+      return who + " ran " + cmd;
+    }
+    if (first.access === "read") return who + " read " + joinLabels(labels);
+    if (first.event === "exec") {
+      if (inc.killed.length) return "Killed " + who + ": it ran a tampered or unknown file in " + joinLabels(labels);
+      return who + " ran a tampered or unknown file in " + joinLabels(labels);
+    }
+    if (inc.killed.length) return "Killed " + who + " after it changed " + joinLabels(labels);
+    if (inc.counts.would_kill) return "Would have killed " + who + " (audit mode): it changed " + joinLabels(labels);
+    return who + " changed " + joinLabels(labels);
+  }
+
+  function nextSteps(inc) {
+    var s = [];
+    var q = inc.kept.filter(function (k) { return k.a.action === "quarantined"; });
+    var snaps = inc.kept.filter(function (k) { return k.a.action === "snapshot"; });
+    var touchedToolchain = inc.rules.some(function (r) { return r === "homebrew-toolchain" || r === "pyenv"; });
+    if (inc.audit) s.push(["Nothing was changed, because the watcher is in audit mode. Check whether this was expected before switching to enforce."]);
+    if (inc.kind === "watcher") {
+      s.push(["Find out what got root. The process chain shows which app or script sent the signal; check what asked for an admin password around this time."]);
+      if (q.length) s.push(["Look at what replaced the file before it was reverted: ", code("sudo ls -l \"" + q[0].a.to + "\"")]);
+      s.push(["Treat the machine as compromised: a process ran as root. Rotate the credentials stored on it."]);
+      return s;
+    }
+    if (inc.killed.length && touchedToolchain) {
+      s.push(["Treat the machine as compromised until reviewed. The script ran before its first protected write, so it may have read tokens or keys from disk. Rotate them."]);
+      var rp = rootProc(inc);
+      if (rp) s.push(["Find where ", code(cmdOf(rp)), " came from (the repo, package or app that started it) and remove it."]);
+    }
+    if (q.length) s.push(["Inspect the quarantined file without running it: ", code("sudo less \"" + q[0].a.to + "\"")]);
+    snaps.forEach(function (k) {
+      if (/LaunchAgents|LaunchDaemons/.test(k.a.path || "")) {
+        s.push(["If you don't recognize this launch agent, unload and delete it: ",
+          code("launchctl bootout gui/$(id -u) \"" + k.a.path + "\" && rm \"" + k.a.path + "\"")]);
+      } else {
+        s.push(["Compare the saved copy with the file now: ", code("sudo diff \"" + k.a.to + "\" \"" + k.a.path + "\"")]);
+      }
+    });
+    if (!inc.killed.length && !inc.counts.would_kill && !q.length && snaps.length) {
+      s.push(["If you made this change yourself, nothing else to do. This rule only alerts."]);
+    }
+    inc.hints.forEach(function (x) { s.push(["The watcher could not restore a file: " + x]); });
+    return s;
+  }
+  function code(t) { return h("code", { class: "inline-code", text: t }); }
+
+  function copyButton(text) {
+    var b = h("button", { class: "btn small", type: "button", text: "Copy" });
+    b.addEventListener("click", function (e) {
+      e.preventDefault(); e.stopPropagation();
+      var done = function () { b.textContent = "Copied"; setTimeout(function () { b.textContent = "Copy"; }, 1400); };
+      var fallback = function () {
+        var target = b.parentNode && b.parentNode.querySelector(".path");
+        if (!target) return;
+        var r = document.createRange(); r.selectNodeContents(target);
+        var sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(r);
+        b.textContent = "Selected; press ⌘C";
+      };
+      try {
+        if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(done, fallback);
+        else fallback();
+      } catch (err) { fallback(); }
+    });
+    return b;
+  }
+
+  // ------------------------------------------------------------ render: status + source + totals
+  function renderStatus(recs) {
+    var el = document.getElementById("status"); clear(el);
+    var host = "", mode = "", lastHb = null, lastStart = null, lastStop = null, unclean = 0;
+    recs.forEach(function (r) {
+      if (r.host) host = r.host;
+      if (r.mode && (r.type === "started" || r.type === "heartbeat")) mode = r.mode;
+      if (r.type === "heartbeat") lastHb = r;
+      if (r.type === "started") lastStart = r;
+      if (r.type === "stopped") lastStop = r;
+      if (r.type === "tamper_attempt" && /without a clean shutdown/.test(r.detail || "")) unclean++;
+    });
+    if (host) add(el, h("span", { class: "chip" }, "Host ", h("b", { class: "mono", text: host })));
+    if (mode) add(el, h("span", { class: "chip mode " + mode, text: mode, title: mode === "enforce" ? "Kills and reverts" : "Alerts only; nothing is changed" }));
+    var stopped = lastStop && (!lastStart || lastStop._t >= lastStart._t);
+    var last = recs.length ? recs[recs.length - 1] : null;
+    if (last) {
+      var txt = stopped ? "Stopped at " + wall(lastStop.ts).time
+        : lastHb ? "Last heartbeat " + wall(lastHb.ts).time : "No heartbeat in this log";
+      add(el, h("span", { class: "chip" }, h("span", { class: "dot " + (stopped || !lastHb ? "bad" : "ok") }), txt));
+    }
+    if (unclean) add(el, h("span", { class: "chip", title: "The watcher was killed and launchd restarted it" },
+      h("span", { class: "dot bad" }), plural(unclean, "unclean restart")));
+  }
+
+  function renderSource() {
+    var p = document.getElementById("source-text"); clear(p);
+    var n = state.records.length;
+    if (state.source === "sample") {
+      add(p, [h("strong", { text: "Sample data from a made-up laptop. " }),
+        "Open your own log, or drop it on this box, to see your machine.",
+        h("div", { class: "hint" }, "The log is at ", code(LOG_PATH),
+          ". In the file picker press ⌘⇧G and paste that path. If macOS won't let you open it, copy it first: ",
+          code("sudo cp " + LOG_PATH + " ~/Desktop/"))]);
+    } else {
+      add(p, [h("strong", { text: state.fileName }), " · " + plural(n, "record"),
+        state.bad ? h("div", { class: "hint", text: plural(state.bad, "line") + " skipped because they were not toolchain-guard JSON." }) : null]);
+    }
+    if (state.error) add(p, h("div", { class: "err", text: state.error }));
+    document.getElementById("reset").hidden = state.source === "sample";
+  }
+
+  function renderTotals(incidents, recs) {
+    var el = document.getElementById("totals"); clear(el);
+    var review = 0, killed = {}, restored = 0, quarantined = 0, accepted = 0;
+    incidents.forEach(function (i) {
+      if (rank(i.sev) >= 3) review++;
+      i.killed.forEach(function (p) { killed[p] = 1; });
+      restored += i.counts.restored + i.counts.mode_restored;
+      quarantined += i.counts.quarantined;
+    });
+    recs.forEach(function (r) {
+      if (r.type === "rebaselined" && r.changes && r.changes.counts) {
+        var c = r.changes.counts; accepted += (c.added || 0) + (c.changed || 0) + (c.removed || 0);
+      }
+    });
+    [[review, "high or critical alerts", review > 0],
+     [Object.keys(killed).length, "processes killed"],
+     [restored, "files restored"],
+     [quarantined, "files quarantined"],
+     [accepted, "file changes accepted"]].forEach(function (t) {
+      add(el, h("div", { class: "total" + (t[2] ? " alarm" : "") }, h("div", { class: "n", text: num(t[0]) }), h("div", { class: "l", text: t[1] })));
+    });
+  }
+
+  // ------------------------------------------------------------ render: alerts
+  var SEV_FILTERS = [["all", "All"], ["critical", "Critical"], ["high", "High+"], ["medium", "Medium+"]];
+  function renderSevButtons() {
+    var el = document.getElementById("sev"); clear(el);
+    SEV_FILTERS.forEach(function (f) {
+      var b = h("button", { type: "button", "aria-pressed": String(state.sev === f[0]), text: f[1] });
+      b.addEventListener("click", function () { state.sev = f[0]; render(); });
+      add(el, b);
+    });
+  }
+  function passSev(inc) {
+    if (state.sev === "all") return true;
+    if (state.sev === "critical") return inc.sev === "critical";
+    if (state.sev === "high") return rank(inc.sev) >= 3;
+    return rank(inc.sev) >= 2;
+  }
+
+  function actionChips(inc) {
+    var c = inc.counts, out = [];
+    if (inc.killed.length) out.push(["bad", "Killed " + plural(inc.killed.length, "process", "processes")]);
+    if (c.would_kill) out.push(["warn", "Would kill (audit)"]);
+    if (c.restored + c.mode_restored) out.push(["good", "Restored " + plural(c.restored + c.mode_restored, "file")]);
+    if (c.quarantined) out.push(["good", "Quarantined " + plural(c.quarantined, "file")]);
+    if (c.would_revert) out.push(["warn", "Would revert " + plural(c.would_revert, "file")]);
+    if (c.snapshot) out.push(["", "Saved " + plural(c.snapshot, "copy", "copies") + " for review"]);
+    if (c.impossible || c.failed) out.push(["bad", "Could not restore " + plural(c.impossible + c.failed, "file")]);
+    return out.map(function (x) { return h("span", { class: "act " + x[0], text: x[1] }); });
+  }
+
+  function eventRows(inc) {
+    var rows = inc.items.map(function (r) {
+      var result = (r.actions || []).map(function (a) {
+        return a.action === "killed" ? "killed" : a.action.replace(/_/g, " ");
+      }).filter(function (v, i, arr) { return arr.indexOf(v) === i; }).join(", ");
+      var what = r.type === "violation" ? (r.event || "") : r.type === "drift" ? (r.detected_by || "scan") : r.type.replace(/_/g, " ");
+      var target = (r.paths || (r.path ? [r.path] : [])).join("\n") || r.detail || r.error || "";
+      return h("tr", null,
+        h("td", { class: "t mono", text: wall(r.ts).time }),
+        h("td", { class: "mono", text: r.rule || "" }),
+        h("td", { text: what + (r.rename_over_existing ? " (over existing)" : "") }),
+        h("td", { class: "path", text: target }),
+        h("td", { text: result || (r.note || "alert") }));
+    });
+    return h("div", { class: "scroll" }, h("table", null,
+      h("thead", null, h("tr", null, ["Time", "Rule", "Event", "Path", "Result"].map(function (t) { return h("th", { text: t }); }))),
+      h("tbody", null, rows)));
+  }
+
+  function chainView(inc) {
+    var killed = {}; inc.killed.forEach(function (p) { killed[p] = 1; });
+    var rows = inc.chain.slice().reverse().map(function (p, i) {
+      var cls = "proc" + (killed[p.pid] ? " killed" : "") + (isSession(p) ? " session" : "");
+      return h("div", { class: cls },
+        h("span", { class: "pid", text: "pid " + p.pid }),
+        h("span", { class: "cmd", style: "padding-left:" + Math.min(i, 6) * 12 + "px" },
+          i ? "└ " : "",
+          cmdOf(p),
+          p.euid === 0 ? h("span", { class: "root", text: "  (root)" }) : null));
+    });
+    return h("div", { class: "chain" }, rows,
+      inc.killed.length ? h("div", { class: "when", text: "Struck through: killed. Your terminal session is never killed." }) : null);
+  }
+
+  function keptView(inc) {
+    return h("div", { class: "kept" }, inc.kept.map(function (k) {
+      return h("div", { class: "kept-row" },
+        h("span", { class: "lbl", text: k.kind + (k.a.reason ? " · " + k.a.reason : "") + " · from " + (k.a.path || "") }),
+        h("div", { class: "copyline" }, h("span", { class: "path", text: k.a.to || "" }), copyButton(k.a.to || "")),
+        k.a.sha256 ? h("span", { class: "path when", text: "sha256 " + k.a.sha256 }) : null);
+    }));
+  }
+
+  function alertCard(inc) {
+    var w = wall(inc.ts);
+    var mainPaths = inc.paths.slice(0, 3);
+    var steps = nextSteps(inc);
+    return h("details", { class: "card sev-" + inc.sev },
+      h("summary", null,
+        h("div", { class: "card-top" },
+          h("span", { class: "sev " + inc.sev, text: inc.sev }),
+          h("span", { class: "when", text: dayLabel(w.date) + " · " + w.time }),
+          inc.rules.map(function (r) { return h("span", { class: "rule", text: r }); })),
+        h("h3", { text: inc.title }),
+        mainPaths.length ? h("div", { class: "paths" }, mainPaths.map(function (p) { return h("span", { class: "path", text: p }); }),
+          inc.paths.length > 3 ? h("span", { class: "when", text: "+" + (inc.paths.length - 3) + " more" }) : null) : null,
+        h("div", { class: "acts" }, actionChips(inc),
+          h("span", { class: "more" }, h("span", { class: "closed", text: "Details ▸" }), h("span", { class: "open", text: "Hide details ▾" })))),
+      h("div", { class: "detail" },
+        h("div", null, h("h4", { text: "What happened" }), eventRows(inc)),
+        inc.chain.length ? h("div", null, h("h4", { text: "Process chain, outermost first" }), chainView(inc)) : null,
+        inc.kept.length ? h("div", null, h("h4", { text: "Files kept for review" }), keptView(inc)) : null,
+        steps.length ? h("div", null, h("h4", { text: "What to do" }), h("ol", { class: "steps" }, steps.map(function (s) { return h("li", null, s); }))) : null));
+  }
+
+  function renderAlerts(incidents) {
+    var el = document.getElementById("alerts"); clear(el);
+    var q = state.q;
+    var shown = incidents.filter(function (i) { return passSev(i) && (!q || i.text.indexOf(q) >= 0); }).reverse();
+    var sub = document.getElementById("alerts-sub");
+    sub.textContent = incidents.length
+      ? "Newest first. Events from the same script are grouped. " + (shown.length === incidents.length ? plural(incidents.length, "alert") : num(shown.length) + " of " + plural(incidents.length, "alert")) + "."
+      : "";
+    if (!incidents.length) {
+      add(el, h("div", { class: "empty", text: "No alerts in this log. An alert appears here when something outside brew or an allowed tool changes a protected file, or when something tries to stop the watcher." }));
+      return;
+    }
+    if (!shown.length) { add(el, h("div", { class: "empty", text: "No alerts match this filter." })); return; }
+    shown.forEach(function (i) { add(el, alertCard(i)); });
+  }
+
+  // ------------------------------------------------------------ render: edit history
+  function changeList(label, cls, sign, items, total) {
+    if (!total) return null;
+    return h("div", null,
+      h("h5", { text: label + " (" + num(total) + ")" }),
+      h("ul", null, items.map(function (p) { return h("li", { class: cls, text: sign + " " + p }); }),
+        total > items.length ? h("li", { class: "note", text: "+" + num(total - items.length) + " more. The log lists up to 200 paths of each kind." }) : null));
+  }
+
+  function editEntry(r) {
+    var w = wall(r.ts), cls = "entry", what = "", why = [], body = null;
+    if (r.type === "window") {
+      cls += " window";
+      what = r.state === "open" ? "Maintenance window opened" + (r.minutes ? " for " + Math.round(r.minutes) + " min" : "") : "Maintenance window closed";
+      if (r.by) why.push("by " + r.by);
+      if (r.state === "open") why.push("brew may change the Homebrew prefix until it closes");
+    } else if (r.type === "rebaselined" || r.type === "baselined") {
+      var ch = r.changes, c = ch && ch.counts;
+      if (r.type === "baselined") { cls += " sys"; what = "First baseline taken: " + plural(r.entries || 0, "file") + " tracked"; }
+      else if (!ch) { cls += " edit"; what = "Baseline updated (" + plural(r.entries || 0, "entry", "entries") + ")"; why.push("this log was written by a version that does not list the changed files"); }
+      else {
+        var total = (c.added || 0) + (c.changed || 0) + (c.removed || 0);
+        cls += total ? " edit" : " sys";
+        what = total ? "Accepted " + plural(total, "file change") : "Baseline refreshed, no file changes";
+        if (total) why.push([c.added ? num(c.added) + " added" : "", c.changed ? num(c.changed) + " changed" : "", c.removed ? num(c.removed) + " removed" : ""].filter(Boolean).join(", "));
+        if (total) body = h("details", null, h("summary", { text: "Show files" }),
+          h("div", { class: "changes" },
+            changeList("Added", "add", "+", ch.added || [], c.added || 0),
+            changeList("Changed", "chg", "~", ch.changed || [], c.changed || 0),
+            changeList("Removed", "del", "−", ch.removed || [], c.removed || 0)));
+      }
+      if (r.trigger) why.push(r.trigger);
+      if (r.by) why.push("by " + r.by);
+      if (r.accepted_by && r.accepted_by.length) why.push("made by " + r.accepted_by[0] + (r.accepted_by.length > 1 ? " (+" + (r.accepted_by.length - 1) + ")" : ""));
+    } else if (r.type === "started") {
+      cls += " sys"; what = "Watcher started in " + (r.mode || "?") + " mode";
+      why.push(plural(r.baseline_entries || 0, "file") + " in the baseline", "pid " + r.pid);
+    } else if (r.type === "stopped") {
+      cls += r.authorized ? " sys" : " sys alarm";
+      what = r.authorized ? "Watcher stopped with the stop command" : "Watcher stopped without the stop command";
+      if (r.signal) why.push("signal " + r.signal);
+      if (!r.authorized) why.push("a system shutdown, or someone stopping it");
+    } else if (r.type === "stop_authorized") {
+      cls += " sys"; what = "Stop authorized"; if (r.by) why.push("by " + r.by);
+    } else if (r.type === "started_after_reboot") {
+      cls += " sys"; what = "Watcher was running when the machine last shut down";
+    }
+    return h("div", { class: cls },
+      h("div", { class: "entry-top" }, h("span", { class: "when", text: w.time }), h("span", { class: "what", text: what })),
+      why.length ? h("div", { class: "why", text: why.join(" · ") }) : null,
+      body);
+  }
+
+  function renderEdits(recs) {
+    var el = document.getElementById("edits"); clear(el);
+    var q = state.q;
+    var items = recs.filter(function (r) {
+      return EDIT_TYPES[r.type] && (!q || JSON.stringify(r).toLowerCase().indexOf(q) >= 0);
+    }).reverse();
+    if (!items.length) {
+      add(el, h("div", { class: "empty", text: q ? "No edits match this filter." : "No edits in this log yet. Accepted changes from brew (inside a maintenance window) and from allowed tools such as pyenv rehash appear here." }));
+      return;
+    }
+    var day = null, rail = null;
+    items.forEach(function (r) {
+      var d = wall(r.ts).date;
+      if (d !== day) {
+        day = d;
+        add(el, h("div", { class: "day", text: dayLabel(d) }));
+        rail = h("div", { class: "rail" }); add(el, rail);
+      }
+      add(rail, editEntry(r));
+    });
+  }
+
+  // ------------------------------------------------------------ top-level
+  var incidentsCache = null;
+  function render() {
+    renderSource();
+    renderStatus(state.records);
+    if (!incidentsCache) incidentsCache = buildIncidents(state.records);
+    renderTotals(incidentsCache, state.records);
+    renderSevButtons();
+    renderAlerts(incidentsCache);
+    renderEdits(state.records);
+  }
+  function load(text, source, name) {
+    var parsed = parseLog(text);
+    if (source !== "sample" && !parsed.records.length) {
+      state.error = (name || "That file") + " has no toolchain-guard records. Pick " + LOG_PATH + " or a copy of it.";
+      renderSource(); return;
+    }
+    state.records = parsed.records; state.bad = parsed.bad; state.source = source;
+    state.fileName = name || ""; state.error = ""; incidentsCache = null;
+    render();
+  }
+  function readFile(f) {
+    if (!f) return;
+    var rd = new FileReader();
+    rd.onload = function () { load(String(rd.result || ""), "file", f.name); };
+    rd.onerror = function () { state.error = "Could not read " + f.name + ". Copy it somewhere you own first: sudo cp " + LOG_PATH + " ~/Desktop/"; renderSource(); };
+    rd.readAsText(f);
+  }
+
+  document.getElementById("file").addEventListener("change", function (e) { readFile(e.target.files && e.target.files[0]); e.target.value = ""; });
+  document.getElementById("reset").addEventListener("click", function () { load(sampleText(), "sample"); });
+  document.getElementById("q").addEventListener("input", function (e) { state.q = e.target.value.trim().toLowerCase(); render(); });
+  var src = document.getElementById("source");
+  ["dragenter", "dragover"].forEach(function (t) { document.addEventListener(t, function (e) { e.preventDefault(); src.classList.add("drag"); }); });
+  ["dragleave", "drop"].forEach(function (t) { document.addEventListener(t, function (e) { e.preventDefault(); if (t === "drop" || e.target === document.documentElement) src.classList.remove("drag"); }); });
+  document.addEventListener("drop", function (e) { readFile(e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0]); });
+
+  function sampleText() { return document.getElementById("sample-log").textContent; }
+  load(sampleText(), "sample");
+})();
+</script>
+</body>
+</html>
