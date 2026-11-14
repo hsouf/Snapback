@@ -10,6 +10,10 @@ A root watcher for macOS 13+ aimed at the case where an attacker is already runn
 
 It is a prototype for a test machine or a small pilot. Read [Limits](#limits) before relying on it. The most important one is that it **reacts, it does not block**: macOS only lets a process deny an operation in advance if it holds Apple's Endpoint Security entitlement.
 
+It comes with a local UI for reviewing what it caught and what it did about it ([Log viewer](#log-viewer)):
+
+![Snapback log viewer: watcher status, totals, and alerts showing severity, affected paths and the actions taken](docs/log-viewer.png)
+
 ## Background
 
 [Binance's initial report on its 29 October 2026 incident](https://x.com/binance/status/2117626126214504729) describes an engineer running a fake job-interview "assignment" repository whose setup step swapped a Homebrew-installed `pyenv` for a trojan that ran commands and talked to an attacker's server. Their endpoint security did not detect it. The report lists the file operations:
@@ -36,7 +40,8 @@ On Apple Silicon, `/opt/homebrew` is owned by the developer's own account, so an
 | `install.sh` | Installs, baselines and starts it (`--uninstall` removes it) |
 | `simulate_attack.sh` | Replays the post-mortem steps with a harmless payload |
 | `test_snapback.py` | 153 automated checks with synthetic events and real processes (no root needed) |
-| `log-viewer.html` | Opens the alert log in a browser: incidents and edit history. Ships with sample data |
+| `log-viewer.html` | The UI: a single local page for the alert log (status, totals, alerts, edit history). Ships with sample data |
+| `docs/log-viewer.png` | Screenshot of the UI |
 
 ## How it works
 
@@ -177,7 +182,29 @@ snapback.py test-alert                   # check the log, syslog and webhook pat
 snapback.py stop                         # stop without a tamper alert
 ```
 
-To review alerts, copy the log out (`sudo cp /var/log/snapback.jsonl ~/Desktop/`) and open `log-viewer.html` in a browser. The page makes no network requests and shows log content as plain text only. Each incident lists what was killed, restored and quarantined, the process chain, where the evidence was saved, and what to do next.
+## Log viewer
+
+`log-viewer.html` is a single self-contained page for reviewing what Snapback saw and did. Open it in any browser. It ships with the sample incident from [Background](#background), so you can see it before installing anything.
+
+To look at your own machine, copy the log somewhere you can read it, then use **Open Log File…** or drop the file on the page:
+
+```bash
+sudo cp /var/log/snapback.jsonl ~/Desktop/
+open log-viewer.html
+```
+
+What it shows:
+
+- **Status bar.** Host, mode (enforce or audit), last heartbeat and unclean restarts, so you can tell at a glance whether the watcher is alive and whether anyone killed it.
+- **Totals.** High or critical alerts, processes killed, files restored, files quarantined and file changes accepted.
+- **Alerts.** Newest first, with events from the same script grouped into one incident. You can filter by severity or search by path, rule or command. Expanding an incident shows:
+  - each event and its result
+  - the process chain, with killed processes struck through
+  - where the quarantined files and snapshots were saved, with copy buttons
+  - what to do next
+- **Edit history.** Changes accepted into the baseline, with the file lists. These come from brew inside a maintenance window or from allowed tools such as `pyenv rehash`. It also shows window opens and closes and watcher starts and stops.
+
+The page makes no network requests and never uploads the log. Every value is shown as plain text, so file names and commands an attacker chose can't run in it. It follows the system's light or dark appearance and works on a phone.
 
 ## What "can't be killed" means here
 
