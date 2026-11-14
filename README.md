@@ -8,7 +8,7 @@ A root watcher for macOS 13+ aimed at the case where an attacker is already runn
 - **Attack commands** (reverse shells, password-phishing dialogs, keychain dumps, disabling Gatekeeper, adding root certificates): kills the high-confidence ones, alerts on the rest.
 - **System events** (SSH and screen-sharing logins, new users and admin-group changes, privacy permission grants, new background items, configuration profiles, XProtect detections, failed sudo): alerts.
 
-It is a prototype for a test machine or a small pilot. Read [Limits](#limits) before relying on it. The most important one is that it **reacts, it does not block**: macOS only lets a process deny an operation in advance if it holds Apple's Endpoint Security entitlement.
+It is a prototype for a test machine or a small pilot. Read [Limits](#limits) before relying on it, and [Roadmap](#roadmap) for the plan to turn it into a complete endpoint agent. The most important one is that it **reacts, it does not block**: macOS only lets a process deny an operation in advance if it holds Apple's Endpoint Security entitlement.
 
 It comes with a local UI for reviewing what it caught and what it did about it ([Log viewer](#log-viewer)):
 
@@ -256,6 +256,131 @@ Keep Snapback alongside it for what Santa doesn't do here: reverting and quarant
 **Not covered:** network connections (macOS has no notify event for them; use a Network Extension firewall), clipboard and screen access beyond the TCC-grant event, pyc poisoning of Python packages in `__pycache__` (alert-only under Homebrew because Python writes these lazily), and anything outside the configured paths.
 
 **eslogger's JSON format is not a stable API**, and Apple says so. The parser is tolerant and the prefilter falls back to full parsing, but after macOS upgrades check `sudo eslogger rename | head -n 1`, and run the test suite, which verifies the event names. Granting Full Disk Access to Apple's shared Python also grants it to any other launchd job using the same interpreter. For anything beyond a pilot, ship the watcher as a signed binary or, better, as an ES system extension, and grant access to that alone.
+
+## Roadmap
+
+The goal is a single agent that keeps a developer's Mac safe without other tools beside it. It should block what an attacker running as the developer tries to do, roll back whatever gets through, and report to a central console. Today Snapback is a reactive prototype (see [Limits](#limits)), and parts of that job are done by other tools: Santa (blocking executables and file access), BlockBlock (persistence), LuLu or Little Snitch (outbound network), and an EDR. The phases below are ordered by how much risk each one removes. Each phase has an exit check that must pass before the next phase starts.
+
+### Phase 0: Prototype (done)
+
+- [x] Root watcher on `eslogger`, with a prefilter, dropped-event detection and stream-stall restart
+- [x] Toolchain protection: kill the script's process tree, revert from the vault, quarantine
+- [x] Exec-time integrity check against the vault for binaries and `#!` scripts under `revert` rules
+- [x] Persistence, credential-read, attack-command and system-event rules (alert or kill)
+- [x] Allow lists built only on kernel-attested facts (executable, script, signing ID, platform flag), plus env-injection checks
+- [x] Brew maintenance windows bound to a pid
+- [x] Symlink-safe repairs through directory descriptors
+- [x] Self-protection: launchd `KeepAlive`, tamper alerts, authorized stop
+- [x] JSONL log, syslog, HMAC-signed webhook, heartbeat, log viewer
+- [x] 153 automated tests on synthetic events
+
+### Phase 1: Prove it on real machines
+
+- [ ] Run against a live `eslogger` stream on every supported macOS version (13, 14, 15, 26)
+- [ ] Measure CPU, memory and event rate on a busy dev machine (builds, `npm install`, Docker) and set a performance budget
+- [ ] Two-week audit-mode pilot on a few laptops; tune allow lists until false positives are under one per machine per week
+- [ ] Replay real attacks end to end in a VM: the Binance sequence, a malicious npm `postinstall`, a `.vscode/tasks.json` that runs on folder open, an infostealer sample
+- [ ] Installer option to move Homebrew to a dedicated `brew` account
+- [ ] Switch the pilot's toolchain rules to `enforce`
+
+**Exit:** every replay is caught, and a week in `enforce` breaks no developer workflow.
+
+### Phase 2: Native, signed agent
+
+Blocking needs this phase: only a signed process holding the Endpoint Security entitlement can answer AUTH events.
+
+- [ ] Request the Endpoint Security entitlement (`com.apple.developer.endpoint-security.client`) on the company's Apple Developer account
+- [ ] Decide whether to build from scratch or fork Santa. Santa is Apache-2.0, so a fork brings binary and file authorization, sync and USB control on day one, and Snapback's rules become an extension of it
+- [ ] Rewrite the daemon as an ES system extension (Swift or Objective-C++), signed and notarized; drop Python and `eslogger`
+- [ ] Port the rule engine and the `rules.json` schema; keep the existing tests passing against the new engine
+- [ ] Muting and decision caching so AUTH replies meet the kernel deadline; document what happens when a deadline is missed
+- [ ] MDM deployment: system extension policy, PPPC (Full Disk Access) profile, managed login item, agent cannot be removed by the user
+- [ ] Signed auto-update for the agent
+
+**Exit:** the native agent matches the prototype on the Phase 1 replays and stays within the performance budget.
+
+### Phase 3: Prevention (Santa parity)
+
+Binary authorization
+- [ ] Allow or block every exec (AUTH_EXEC) by SHA-256, CDHash, signing ID, Team ID or certificate
+- [ ] Monitor mode (log only) and Lockdown mode (only allowed executables run)
+- [ ] Transitive allowlisting: executables produced by allowed compilers are allowed, so local builds keep working in Lockdown
+- [ ] Apply the same rules to `#!` scripts and to script files passed to interpreters (Santa only judges the interpreter)
+- [ ] By default, block unsigned and ad-hoc-signed executables from Downloads and other quarantine-flagged files
+
+File access authorization
+- [ ] Deny writes to protected toolchain paths except by allowed processes. Kill-and-revert stays as the backstop
+- [ ] Deny reads of SSH keys, cloud tokens, keychains, browser stores and wallets except by allowed processes
+- [ ] `audit` or `enforce` per rule, with the same allow syntax as today
+
+Device control
+- [ ] Block USB and other removable media, or remount it read-only and `noexec`
+
+Developer experience
+- [ ] Menu bar app that shows each block with the reason and the process involved
+- [ ] Approval requests: the developer asks, an admin approves from the console. Without a sync server, the developer approves locally with Touch ID
+- [ ] `snapbackctl` CLI: status, which rule applies to a file, why something was blocked
+
+Fleet management
+- [ ] Sync server: distributes rules per machine and per group, collects events
+- [ ] Structured telemetry (execs, file events, allow and deny decisions) to a file, syslog or a streaming endpoint
+
+Self-protection
+- [ ] Deny signals, unlink, rename and `launchctl` unload aimed at the agent through AUTH events, where today it only alerts
+
+**Exit:** the Binance replay is denied at its first write, and the infostealer replay reads no credentials.
+
+### Phase 4: Beyond Santa, toward a single agent
+
+Persistence (BlockBlock's job)
+- [ ] Hold each new launch agent or daemon, login item, background item, cron entry or shell startup edit until the user allows or blocks it
+
+Network (LuLu's or Little Snitch's job)
+- [ ] Network Extension content filter with outbound allow lists per process, and a prompt for unknown executables
+- [ ] DNS logging, and blocking of known-bad domains
+- [ ] Alert on outbound connections from processes descended from a freshly cloned repo
+- [ ] Host isolation on a critical alert: cut every connection except to the console
+
+Developer supply chain
+- [ ] Flag and sandbox package install scripts (npm/yarn/pnpm `postinstall`, pip `setup.py`, cargo `build.rs`)
+- [ ] Treat freshly cloned repos as untrusted until reviewed; warn on code that runs automatically (VS Code tasks set to `runOn: folderOpen`, devcontainers, `.envrc`, git hooks)
+- [ ] Watch editor extensions, AI-tool configs and MCP server configs for new or changed entries
+- [ ] Integrity checks for Python `__pycache__` and global `node_modules`
+
+Credentials and privilege
+- [ ] Watch the clipboard for crypto-address swaps
+- [ ] Detect and block sudo password phishing: fake prompts, `brew` aliases, `osascript` password dialogs
+- [ ] Admin on demand: developers use standard accounts and get time-limited, logged elevation with a stated reason
+- [ ] Check for hardware-backed SSH keys (Secure Enclave, YubiKey) and recommend them
+
+Posture
+- [ ] Report and alert on FileVault, SIP, Gatekeeper, the firewall, macOS and XProtect versions, automatic updates and screen lock
+
+Response and forensics
+- [ ] Evidence bundle collected automatically on a critical alert and on demand: process tree, quarantined files, unified log excerpt, persistence inventory
+- [ ] Remote actions from the console: kill, quarantine, isolate, roll back
+
+Detection content
+- [ ] Rule library mapped to MITRE ATT&CK for macOS, with one positive and one benign test per rule
+- [ ] Signed rule updates that ship separately from agent releases
+- [ ] Chained detections, such as clone → install script → credential read → outbound connection, where today each event is judged alone
+
+Console
+- [ ] Fleet dashboard: agent health, heartbeats, alerts and rule coverage per machine
+- [ ] Export to a SIEM (Datadog, Splunk, Elastic), plus Slack and PagerDuty paging
+- [ ] Alert triage with comments, assignment and suppressions
+
+**Exit:** on pilot laptops, Snapback replaces Santa, BlockBlock, LuLu and any custom scripts with no loss of coverage.
+
+### Phase 5: Assurance and 1.0
+
+- [ ] External security review of the agent and the sync server
+- [ ] Red-team exercise against a laptop protected only by Snapback
+- [ ] Fuzz event parsing, rule loading and the sync protocol
+- [ ] Published threat model, performance budget and support matrix
+- [ ] Incident runbook for every alert type
+
+**Exit:** release 1.0.
 
 ## License
 
