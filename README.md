@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/logo.png" alt="Snapback" width="420">
+</p>
+
 # Snapback (prototype)
 
 A root watcher for macOS 13+ aimed at the case where an attacker is already running code as a developer, through a malicious repo, package hook, extension or stolen session. It watches the things such an attacker goes after first and reacts within milliseconds:
@@ -42,6 +46,7 @@ On Apple Silicon, `/opt/homebrew` is owned by the developer's own account, so an
 | `test_snapback.py` | 153 automated checks with synthetic events and real processes (no root needed) |
 | `log-viewer.html` | The UI: a single local page for the alert log (status, totals, alerts, edit history). Ships with sample data |
 | `docs/log-viewer.png` | Screenshot of the UI |
+| `docs/logo.png` | Project logo |
 
 ## How it works
 
