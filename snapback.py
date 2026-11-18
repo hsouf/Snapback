@@ -106,6 +106,8 @@ TAINT_BY_FAMILY = {
     "node": {"NODE_OPTIONS", "NODE_PATH"},
 }
 SHELLS = {"sh", "bash", "zsh", "dash", "ksh", "tcsh", "csh", "fish", "env"}
+# Exec-rule match keys that describe who started the process, not the process itself.
+LINEAGE_KEYS = {"parent", "parent_signing", "ancestor"}
 SYSTEM_HOOK_DIRS = ("/usr/local/etc/pyenv.d", "/etc/pyenv.d", "/private/etc/pyenv.d",
                     "/usr/lib/pyenv/hooks")
 
@@ -521,6 +523,9 @@ class Rule:
         self.allow = Allow(raw.get("allow"), users)
         self.match = {k: re.compile(v) for k, v in (raw.get("match") or {}).items()}
         self.exclude_match = {k: re.compile(v) for k, v in (raw.get("exclude_match") or {}).items()}
+        self.needs_lineage = bool(LINEAGE_KEYS & (set(self.match) | set(self.exclude_match)))
+        self.unsigned_only = bool(raw.get("unsigned_only"))  # exec: no team id, not Apple's
+        self.changed_within = float(raw.get("changed_within_seconds") or 0)  # exec: fresh file
         self.root_ancestors = frozenset(a for p in self.paths for a in ancestors(p))
         self._roots = frozenset(self.paths)
         self._prefixes = tuple(self.paths)
@@ -553,14 +558,23 @@ class Rule:
             return False
         return self._include_rx is None or self._include_rx.match(path) is not None
 
-    # exec rules: keys executable / script / args, each a regex
-    def exec_matches(self, exe, script, cmd):
+    # exec rules: keys executable / script / args, and the lineage keys parent /
+    # parent_signing / ancestor, each a regex. A list-valued field (ancestor)
+    # matches if any of its items does.
+    @staticmethod
+    def _exec_hit(fields, key, rx):
+        v = fields.get(key, "")
+        return any(rx.search(x) for x in v) if isinstance(v, list) else rx.search(v) is not None
+
+    def exec_matches(self, exe, script, cmd, lineage=None):
         fields = {"executable": exe or "", "script": script or "", "args": cmd or ""}
+        if lineage:
+            fields.update(lineage)
         if not self.match:
             return False
-        if not all(rx.search(fields.get(k, "")) for k, rx in self.match.items()):
+        if not all(self._exec_hit(fields, k, rx) for k, rx in self.match.items()):
             return False
-        return not any(rx.search(fields.get(k, "")) for k, rx in self.exclude_match.items())
+        return not any(self._exec_hit(fields, k, rx) for k, rx in self.exclude_match.items())
 
     # event rules: keys are dotted suffixes into the flattened payload
     @staticmethod
@@ -1638,6 +1652,7 @@ class Guard:
         pid = info["pid"]
 
         if name == "fork":
+            self.procs.note_es(info)  # attests the parent too (e.g. an app started before us)
             child = proc_info(payload.get("child"))
             self.procs.note_fork(child, pid)
             if pid in self.flagged:
@@ -1800,12 +1815,47 @@ class Guard:
         if not self.cfg.exec_rules:
             return
         cmd = " ".join(args or [])
+        lineage = None
         for rule in self.cfg.exec_rules:
-            if not rule.exec_matches(target.get("path"), script, cmd):
+            if rule.needs_lineage and lineage is None:
+                lineage = self._lineage(pid)
+            if not rule.exec_matches(target.get("path"), script, cmd, lineage):
+                continue
+            if rule.unsigned_only and (target.get("platform") or target.get("team_id")):
+                continue
+            if rule.changed_within and not self._fresh(target.get("path"), rule.changed_within):
                 continue
             if self._allowed(rule, pid, target.get("euid")):
                 continue
             self._violation(rule, "exec", [], pid, command=cmd[:1000])
+
+    def _lineage(self, pid):
+        """Who started `pid`: the parent's executable and signing identity, and every
+        ancestor's executable. Used to detect, never to allow, so entries learned
+        only from ps count too (an attacker gains nothing by posing as Telegram)."""
+        chain = self.procs.chain(pid, depth=12)[1:]
+        if not chain:
+            return {"parent": "", "parent_signing": "", "ancestor": []}
+        parent = chain[0][1]
+        team = "platform" if parent.get("platform") else (parent.get("team_id") or "")
+        sid = parent.get("signing_id") or ""
+        return {"parent": parent.get("path") or "",
+                "parent_signing": f"{team}:{sid}" if team and sid else "",
+                "ancestor": [i.get("path") or "" for _, i in chain]}
+
+    @staticmethod
+    def _fresh(path, within):
+        """True if the file at `path` was written, renamed or chmod'ed in the last
+        `within` seconds. Uses ctime, which no user process can set back. A file
+        that is already gone counts as fresh: droppers delete their payload."""
+        if not path:
+            return False
+        try:
+            return time.time() - os.stat(path).st_ctime <= within
+        except FileNotFoundError:
+            return True
+        except OSError:
+            return False
 
     def _on_system_event(self, name, payload, pid, info):
         flat = None

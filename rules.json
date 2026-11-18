@@ -187,6 +187,36 @@
       "actions": ["alert"]
     },
     {
+      "id": "messenger-and-wallet-data",
+      "description": "A process other than the app itself read Telegram session data or a desktop crypto wallet: what infostealers such as Salat/WebRAT, AMOS and Atomic take",
+      "severity": "high",
+      "access": "read",
+      "paths": [
+        "~/Library/Application Support/Telegram Desktop/tdata",
+        "~/Library/Group Containers/6N38VWS5BX.ru.keepcoder.Telegram",
+        "~/Library/Application Support/Exodus",
+        "~/Library/Application Support/atomic",
+        "~/Library/Application Support/Ledger Live",
+        "~/Library/Application Support/Guarda",
+        "~/Library/Application Support/Coinomi",
+        "~/Library/Application Support/Binance",
+        "~/Library/Application Support/Bitcoin/wallets",
+        "~/Library/Application Support/Litecoin/wallets",
+        "~/Library/Application Support/DashCore/wallets",
+        "~/.electrum/wallets",
+        "~/.electron-cash/wallets",
+        "~/.walletwasabi/client/Wallets",
+        "~/Monero/wallets"
+      ],
+      "allow": {
+        "platform_binaries": "non_tools",
+        "signing_ids": ["6N38VWS5BX:ru.keepcoder.Telegram*"],
+        "ancestor_regex": ["^(/Users/[^/]+)?/Applications/(Telegram|Telegram Desktop|Exodus|Atomic Wallet|Ledger Live|Guarda|Coinomi|Binance|Bitcoin-Qt|Litecoin-Qt|Dash-Qt|Electrum|Electron-Cash|Wasabi Wallet|monero-wallet-gui)\\.app/"],
+        "helpers": false
+      },
+      "actions": ["alert"]
+    },
+    {
       "id": "guard-self-protection",
       "description": "The watcher's own code, rules and LaunchDaemon",
       "severity": "critical",
@@ -318,6 +348,29 @@
       "description": "Code piped from the network or from base64 straight into an interpreter",
       "severity": "medium",
       "match": {"args": "\\b(curl|wget)\\b[^|]*\\|\\s*(sudo\\s+)?((ba|z|da|k)?sh|python[0-9.]*|perl|ruby|node|osascript)\\b|\\bbase64\\s+(-d|--decode|-D)\\b[^|]*\\|\\s*((ba|z)?sh|python[0-9.]*|osascript)\\b"},
+      "actions": ["alert"]
+    },
+    {
+      "id": "app-spawned-shell",
+      "type": "exec",
+      "description": "A messaging app, browser or mail client started a shell, script interpreter or downloader: how a drive-by exploit (for example the Telegram widget attack that dropped Salat/WebRAT) gets its first command",
+      "severity": "critical",
+      "match": {
+        "parent": "/(Telegram|Telegram Desktop|Discord|Slack|WhatsApp|Signal|Microsoft Teams[^/]*|zoom\\.us|Skype|Messenger|Mail|Microsoft Outlook|Thunderbird|Safari|Google Chrome[^/]*|Firefox[^/]*|Brave Browser[^/]*|Microsoft Edge[^/]*|Arc|Opera|Vivaldi)\\.app/Contents/",
+        "executable": "/((ba|z|da|k|tc|c)?sh|fish|pwsh|osascript|python[0-9.]*|perl[0-9.]*|ruby|curl|wget|nc|ncat|socat)$"
+      },
+      "actions": ["kill", "alert"],
+      "kill_scope": "process"
+    },
+    {
+      "id": "fresh-unsigned-binary",
+      "type": "exec",
+      "description": "An unsigned or ad-hoc signed program written in the last 15 minutes ran from a temp, Downloads or Shared folder: a dropped payload",
+      "severity": "high",
+      "match": {"executable": "^(/private)?/(tmp|var/tmp|var/folders)/|^/Users/[^/]+/Downloads/|^/Users/Shared/"},
+      "exclude_match": {"executable": "/go-build[0-9]*/"},
+      "unsigned_only": true,
+      "changed_within_seconds": 900,
       "actions": ["alert"]
     },
     {

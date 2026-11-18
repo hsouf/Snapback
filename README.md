@@ -8,8 +8,8 @@ A root watcher for macOS 13+ aimed at the case where an attacker is already runn
 
 - **Toolchain tampering** (Homebrew, pyenv, global npm and Python packages, PATH): kills the script's process tree, restores the files from a root-owned vault and quarantines what was written. A tampered binary that gets *run* before the revert lands is killed at exec.
 - **Persistence** (launch agents and login items, shell, git, ssh and AI-tool config, Python startup hooks, cron, sudoers): alerts with a saved copy of the change.
-- **Credential theft** (SSH keys, cloud CLI tokens, keychains, browser cookies and passwords, wallets): alerts when anything outside an allow list reads them.
-- **Attack commands** (reverse shells, password-phishing dialogs, keychain dumps, disabling Gatekeeper, adding root certificates): kills the high-confidence ones, alerts on the rest.
+- **Credential theft** (SSH keys, cloud CLI tokens, keychains, browser cookies and passwords, browser and desktop wallets, Telegram sessions): alerts when anything outside an allow list reads them.
+- **Attack commands** (reverse shells, password-phishing dialogs, keychain dumps, disabling Gatekeeper, adding root certificates, a messaging app or browser starting a shell, a freshly dropped unsigned binary running): kills the high-confidence ones, alerts on the rest.
 - **System events** (SSH and screen-sharing logins, new users and admin-group changes, privacy permission grants, new background items, configuration profiles, XProtect detections, failed sudo): alerts.
 
 It is a prototype for a test machine or a small pilot. Read [Limits](#limits) before relying on it, and [Roadmap](#roadmap) for the plan to turn it into a complete endpoint agent. The most important one is that it **reacts, it does not block**: macOS only lets a process deny an operation in advance if it holds Apple's Endpoint Security entitlement.
@@ -43,7 +43,7 @@ On Apple Silicon, `/opt/homebrew` is owned by the developer's own account, so an
 | `brew-guarded` | `brew` wrapper that opens a maintenance window bound to itself |
 | `install.sh` | Installs, baselines and starts it (`--uninstall` removes it) |
 | `simulate_attack.sh` | Replays the post-mortem steps with a harmless payload |
-| `test_snapback.py` | 153 automated checks with synthetic events and real processes (no root needed) |
+| `test_snapback.py` | 170 automated checks with synthetic events and real processes (no root needed) |
 | `log-viewer.html` | The UI: a single local page for the alert log (status, totals, alerts, edit history). Ships with sample data |
 | `docs/log-viewer.png` | Screenshot of the UI |
 | `docs/logo.png` | Project logo |
@@ -85,7 +85,7 @@ Outside maintenance windows, only the allowed tool itself may write, or an Apple
 | `type` | Matches | Typical actions |
 |---|---|---|
 | `files` (default) | File events under `paths`, filtered by `include` / `exclude` globs. `"access": "read"` matches any `open` (for credential stores) | `kill`, `revert`, `alert`, `snapshot` |
-| `exec` | Exec events whose `executable`, `script` or `args` match regexes in `match` (and none in `exclude_match`) | `kill`, `alert` |
+| `exec` | Exec events whose `executable`, `script`, `args`, `parent`, `parent_signing` (`TEAMID:signing.id`) or `ancestor` match regexes in `match` (and none in `exclude_match`). `unsigned_only` keeps Apple and Developer ID signed binaries out; `changed_within_seconds` keeps only binaries whose file changed that recently (by ctime) | `kill`, `alert` |
 | `event` | System events listed in `events`, optionally filtered by `match` on fields of the event | `alert` |
 
 `allow` takes `users`, `ancestor_paths` / `ancestor_regex` (matched against executable and script paths), `signing_ids`, `platform_binaries` (`"all"` or `"non_tools"`, which excludes general-purpose tools like `cat`, `cp`, `curl`, `osascript` and interpreters), `protected_images` (binaries, or scripts run by an interpreter, that sit in a protected tree and match the vault), `only_during_window`, and `helpers`. Each rule can set its own `mode` (`audit` or `enforce`) and `kill_scope` (`script`, `session` or `process`).
@@ -96,6 +96,8 @@ Outside maintenance windows, only the allowed tool itself may write, or an Apple
 3. *Alert.* One JSON record with the rule, the paths, the process chain (with signing identity and script for each process) and every action taken. Repeated events from an already-killed process are logged as `followup` and not re-sent.
 
 In `audit` mode the same record says `would_kill` / `would_revert` and nothing is touched.
+
+**Who started it.** The `parent` and `ancestor` keys let an exec rule look at the process tree, so `app-spawned-shell` can catch the first step of a drive-by exploit: Telegram, a browser or a mail client starting `sh`, `osascript`, `python` or `curl`. It kills only the spawned process and its children, never the app. The parent's identity comes from the fork event even when the app was running before the watcher started. These keys only detect. They are never used to allow anything, so a process the watcher knows only from `ps` still counts.
 
 **Exec-time integrity.** Whenever a file under a `revert` rule is executed, as a binary or as a `#!` script, it is checked against the vault: a stat comparison, plus a hash if the stat differs. A modified or unknown file is killed and restored before it gets far. This covers the gap between a tampering write and its revert, and anything the event stream missed.
 
@@ -254,6 +256,8 @@ Keep Snapback alongside it for what Santa doesn't do here: reverting and quarant
 
 **Exec rules match command lines, which attackers control.** They catch common tooling (stealers, copy-pasted reverse shells) and are trivial to evade for someone who expects them. Treat them as tripwires, not a boundary.
 
+**The drive-by rules have known gaps.** `app-spawned-shell` misses an exploit that runs its payload without a shell, interpreter or downloader, or one that escapes through a process launchd starts (an XPC service, `open`, a LaunchAgent), because those are not children of the app. `fresh-unsigned-binary` misses payloads that are scripts run by a system interpreter, binaries signed with a real Developer ID, and anything dropped outside temp, Downloads and `/Users/Shared`. It also flags your own `cc -o /tmp/a.out` builds, so it only alerts. `messenger-and-wallet-data` allows wallet apps by their path under `/Applications`, not by signing identity (apart from Telegram for macOS). Pin their team IDs once you know them.
+
 **Interpreters launder identity.** A credential read by Homebrew's `python3` running the AWS CLI looks the same as one by `python3` running a stealer, unless the script itself sits in a protected tree. Expect to allow some tools by path and to review the rest.
 
 **The first baseline trusts the machine as it is.** Install on a machine you have reason to believe is clean, or reinstall Homebrew first.
@@ -277,7 +281,7 @@ The goal is a single agent that keeps a developer's Mac safe without other tools
 - [x] Symlink-safe repairs through directory descriptors
 - [x] Self-protection: launchd `KeepAlive`, tamper alerts, authorized stop
 - [x] JSONL log, syslog, HMAC-signed webhook, heartbeat, log viewer
-- [x] 153 automated tests on synthetic events
+- [x] 170 automated tests on synthetic events
 
 ### Phase 1: Prove it on real machines
 

